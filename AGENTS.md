@@ -84,9 +84,9 @@ OIDC authority. See `docs/RELEASING.md`.
 
 ## Where things stand
 
-Repository bootstrap: workspace layout, CI, release scripts, and planning
-docs. The public port and adapters are not implemented yet. Track work in
-`docs/PROJECT_PLAN.md`.
+Port, memory store, and conformance suite are implemented in
+`@pegma/storage-blobs`. Cloud adapters and the first publish are still open.
+Track work in `docs/PROJECT_PLAN.md`.
 
 Siblings: [storage-core](https://github.com/pegma-dev/storage-core),
 [spine](https://github.com/pegma-dev/spine),

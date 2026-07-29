@@ -46,6 +46,7 @@ marketing features.
 
 - [Project plan](docs/PROJECT_PLAN.md) — phases, scope, and decisions
 - [Architecture](docs/ARCHITECTURE.md) — boundaries and threat model
+- [Application patterns](docs/APPLICATION_PATTERNS.md) — metadata + bytes lifecycle
 - [Releasing](docs/RELEASING.md) — trusted-publisher release runbook
 
 ## Development
