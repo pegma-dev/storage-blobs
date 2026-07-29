@@ -561,11 +561,10 @@ async function readBody(
       }
       total += value.byteLength;
       if (total > limitBytes) {
-        try {
-          await reader.cancel();
-        } catch {
+        // Do not await cancel: a hung cancel hook must not block the size error.
+        void reader.cancel().catch(() => {
           // Ignore cancel failures; the size error is what the caller needs.
-        }
+        });
         throw new BlobSizeLimitError(limitBytes);
       }
       // Copy immediately: streams may reuse one scratch buffer for every chunk.

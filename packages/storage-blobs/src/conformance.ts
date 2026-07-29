@@ -670,6 +670,30 @@ export const sizeLimitConformanceCases: readonly SizeLimitConformanceCase[] = [
     },
   },
   {
+    name: "put still throws BlobSizeLimitError when stream cancel never settles",
+    async run(createStore) {
+      const limitBytes = 4;
+      const store = createStore(limitBytes);
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(limitBytes + 1));
+        },
+        cancel() {
+          // Never settle — size rejection must not wait on teardown.
+          return new Promise(() => {
+            /* intentionally unresolved */
+          });
+        },
+      });
+      await assert.rejects(
+        () => store.put("too/hung-cancel", stream),
+        (error: unknown) =>
+          error instanceof BlobSizeLimitError &&
+          error.limitBytes === limitBytes,
+      );
+    },
+  },
+  {
     name: "per-call maxBytes may only lower the store maximum",
     async run(createStore) {
       const store = createStore(100);
