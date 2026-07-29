@@ -2,11 +2,13 @@
 
 ## Status
 
-**Stage:** Phase 5 complete. Port, frozen suite, Azure Blob (Azurite),
-Cloudflare R2 and S3 (LocalStack S3 harness) land; npm publication is still
-open.
+**Stage:** Phase 6 in progress. Port and three cloud adapters are complete;
+package versions are set to `0.1.0` for the first trusted-publisher release.
+Public installability awaits the signed `v0.1.0` release.
 
-**Package (planned first release):** `@pegma/storage-blobs@0.1.0`
+**Package (first release):** `@pegma/storage-blobs@0.1.0` (with adapters
+`@pegma/storage-azure-blob`, `@pegma/storage-cloudflare-r2`,
+`@pegma/storage-s3` at the same version)
 
 **License:** MIT
 
@@ -218,8 +220,9 @@ further port methods require suite additions in the same change.
 **Exit criterion:** suite green against LocalStack, MinIO, or real S3 test
 bucket as chosen in the adapter PR.
 
-### Phase 6 — first supported publish
+### Phase 6 — first supported publish (in progress)
 
+- Package versions aligned at `0.1.0` (this change).
 - Trusted publisher configured for each package.
 - First advertised release `0.1.0` (or repository-wide aligned set) with
   provenance.
