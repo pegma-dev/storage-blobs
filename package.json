@@ -1,0 +1,32 @@
+{
+  "name": "storage-blobs",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Provider-neutral object (blob) storage for Pegma components: a narrow port, conformance suite, and thin cloud adapters.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "npm@11.18.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "check": "tsc -b --pretty false && tsc -p tsconfig.test.json --pretty false",
+    "clean": "tsc -b --clean",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "release:check": "node scripts/release-packages.mjs check",
+    "release:pack": "node scripts/release-packages.mjs pack",
+    "release:publish": "node scripts/release-packages.mjs publish",
+    "test": "npm run build && vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "prettier": "^3.9.6",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}
