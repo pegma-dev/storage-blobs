@@ -20,6 +20,8 @@ import {
 } from "../../../test/localstack.js";
 import { createCloudflareR2BlobStore } from "./index.js";
 
+const HARNESS_ENDPOINT = LOCALSTACK_ENDPOINT;
+
 let bucketCounter = 0;
 const createdBuckets: string[] = [];
 
@@ -110,6 +112,7 @@ async function freshSharedBackend(maxObjectBytes = 2 * 1_024 * 1_024) {
       createCloudflareR2BlobStore({
         client,
         bucket: name,
+        endpoint: HARNESS_ENDPOINT,
         maxObjectBytes,
       }),
     close: async () => {
@@ -157,6 +160,7 @@ describe("createCloudflareR2BlobStore", () => {
           return createCloudflareR2BlobStore({
             client,
             bucket: name,
+            endpoint: HARNESS_ENDPOINT,
             maxObjectBytes: limitBytes,
           });
         });

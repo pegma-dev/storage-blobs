@@ -45,6 +45,20 @@ export interface CloudflareR2BlobStoreOptions {
    * {@link DEFAULT_MAX_OBJECT_BYTES}.
    */
   readonly maxObjectBytes?: number;
+  /**
+   * Stable identity bound into list cursors. Defaults to
+   * `r2|<endpoint>|<bucket>` when {@link endpoint} is set, otherwise
+   * `r2|<bucket>`. Pass an explicit value (or {@link endpoint}) whenever the
+   * same bucket name may exist on more than one account or endpoint so foreign
+   * cursors reject with {@link BlobValidationError}.
+   */
+  readonly backendId?: string;
+  /**
+   * R2 account endpoint (or other S3-compatible base URL) used only to form the
+   * default {@link backendId}. Does not change request routing — configure that
+   * on the {@link S3Client}.
+   */
+  readonly endpoint?: string;
 }
 
 interface R2ListCursor {
@@ -76,17 +90,26 @@ function errorName(error: unknown): string | undefined {
   return candidate.name ?? candidate.Code ?? candidate.code;
 }
 
+function isNoSuchBucket(error: unknown): boolean {
+  const name = errorName(error);
+  return name === "NoSuchBucket" || name === "NoSuchBucketError";
+}
+
+/**
+ * True when the object key is absent. Configuration failures such as a missing
+ * bucket must not be treated as a free key.
+ */
 function isNotFound(error: unknown): boolean {
+  if (isNoSuchBucket(error)) {
+    return false;
+  }
   const code = statusCode(error);
   if (code === 404) {
     return true;
   }
   const name = errorName(error);
   return (
-    name === "NotFound" ||
-    name === "NoSuchKey" ||
-    name === "NotFoundError" ||
-    name === "NoSuchBucket"
+    name === "NotFound" || name === "NoSuchKey" || name === "NotFoundError"
   );
 }
 
@@ -314,12 +337,23 @@ export function createCloudflareR2BlobStore(
     );
   }
   assertBucketName(options.bucket);
+  if (options.backendId !== undefined && options.backendId.length === 0) {
+    throw new BlobValidationError("backendId must be a non-empty string.");
+  }
+  if (options.endpoint !== undefined && options.endpoint.length === 0) {
+    throw new BlobValidationError("endpoint must be a non-empty string.");
+  }
 
   const client = options.client;
   const bucket = options.bucket;
-  // Bucket name is enough: each store instance is one bucket, and dual-store
-  // conformance uses two distinct buckets so foreign cursors reject.
-  const backendId = `r2|${bucket}`;
+  // Prefer host-supplied backendId/endpoint so cursors cannot cross accounts
+  // that reuse a conventional bucket name. Dual-store conformance uses two
+  // distinct buckets, which is enough for that suite when endpoint is omitted.
+  const backendId =
+    options.backendId ??
+    (options.endpoint !== undefined
+      ? `r2|${options.endpoint}|${bucket}`
+      : `r2|${bucket}`);
 
   async function headRaw(key: string): Promise<BlobObjectInfo | null> {
     try {
@@ -463,16 +497,19 @@ export function createCloudflareR2BlobStore(
           return { ...info, body: sdkBody.transformToWebStream() };
         }
         // Fallback: treat as async iterable of bytes (older stream shapes).
-        const iterable = body as AsyncIterable<Uint8Array>;
+        const iterable = body as AsyncIterable<unknown>;
         return {
           ...info,
           body: new ReadableStream<Uint8Array>({
             async start(controller) {
               try {
                 for await (const chunk of iterable) {
-                  controller.enqueue(
-                    chunk instanceof Uint8Array ? copyBytes(chunk) : chunk,
-                  );
+                  if (!(chunk instanceof Uint8Array)) {
+                    throw new BlobStoreError(
+                      `R2 get body chunk for ${JSON.stringify(key)} is not a Uint8Array.`,
+                    );
+                  }
+                  controller.enqueue(copyBytes(chunk));
                 }
                 controller.close();
               } catch (error) {
@@ -516,6 +553,9 @@ export function createCloudflareR2BlobStore(
       }
 
       try {
+        // When ifMatch is set, always send If-Match so a concurrent replace
+        // cannot be deleted by a racy unconditional fallback. Backends that
+        // reject conditional delete must surface as BlobStoreError.
         await client.send(
           new DeleteObjectCommand({
             Bucket: bucket,
@@ -535,22 +575,14 @@ export function createCloudflareR2BlobStore(
           }
           return { ok: false, reason: "changed" };
         }
-        // If-Match not supported: object still matched at HEAD time.
         if (
           ifMatch !== undefined &&
           (statusCode(error) === 400 || errorName(error) === "InvalidArgument")
         ) {
-          try {
-            await client.send(
-              new DeleteObjectCommand({ Bucket: bucket, Key: key }),
-            );
-            return { ok: true };
-          } catch (retryError) {
-            throw new BlobStoreError(
-              `R2 delete failed for ${JSON.stringify(key)}.`,
-              { cause: retryError },
-            );
-          }
+          throw new BlobStoreError(
+            `R2 conditional delete is not supported by this endpoint for ${JSON.stringify(key)}.`,
+            { cause: error },
+          );
         }
         throw new BlobStoreError(
           `R2 delete failed for ${JSON.stringify(key)}.`,

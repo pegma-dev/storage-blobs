@@ -26,16 +26,19 @@ const client = new S3Client({
   },
 });
 
+const endpoint = `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
 const blobs = createCloudflareR2BlobStore({
   client,
   bucket: "my-app-blobs",
+  endpoint,
   maxObjectBytes: 16 * 1024 * 1024,
 });
 ```
 
 One store instance binds to **one bucket**. Namespace with key prefixes. The
 host owns the `S3Client` (credentials, endpoint, retry policy); this package
-never reads environment secrets itself.
+never reads environment secrets itself. Pass `endpoint` (or `backendId`) so
+list cursors cannot cross accounts that reuse a bucket name.
 
 ## Conformance
 
