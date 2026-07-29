@@ -6,10 +6,10 @@
 AWS S3 / S3-compatible adapter for [`@pegma/storage-blobs`](../storage-blobs).
 
 > [!IMPORTANT]
-> Early `0.x`. Not published yet. Verified in this monorepo's CI against
-> LocalStack S3. Point the same client at real AWS S3 for production. Other
-> S3-compatible products must pass the frozen conformance suite before hosts
-> rely on them (MinIO is not a CI-proven target for this package).
+> Early `0.x` (`0.1.0` on npm). Pin exact versions. Verified in this monorepo's
+> CI against LocalStack S3. Point the same client at real AWS S3 for production.
+> Other S3-compatible products must pass the frozen conformance suite before
+> hosts rely on them (MinIO is not a CI-proven target for this package).
 
 ## Usage
 

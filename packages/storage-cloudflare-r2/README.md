@@ -7,9 +7,9 @@ Cloudflare R2 adapter for [`@pegma/storage-blobs`](../storage-blobs), via R2's
 S3-compatible API.
 
 > [!IMPORTANT]
-> Early `0.x`. Not published yet. Verified in this monorepo's CI against
-> LocalStack S3 (S3-compatible local harness). Point the same client at a real
-> R2 endpoint for production.
+> Early `0.x` (`0.1.0` on npm). Pin exact versions. Verified in this monorepo's
+> CI against LocalStack S3 (S3-compatible local harness). Point the same client
+> at a real R2 endpoint for production.
 
 ## Usage
 
