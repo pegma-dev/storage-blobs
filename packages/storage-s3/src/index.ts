@@ -28,13 +28,14 @@ import {
   MAX_LIST_PAGE_SIZE,
 } from "@pegma/storage-blobs";
 
-const R2_LIST_CURSOR_PREFIX = "pegma-cloudflare-r2-list-v1:";
+const S3_LIST_CURSOR_PREFIX = "pegma-s3-list-v1:";
 
-export interface CloudflareR2BlobStoreOptions {
+export interface S3BlobStoreOptions {
   /**
-   * Preconfigured S3 client aimed at R2 (or an S3-compatible stand-in such as
-   * LocalStack). The host owns credentials, endpoint, and networking; this
-   * package never reads environment secrets itself.
+   * Preconfigured S3 client aimed at AWS S3 or a suite-faithful S3-compatible
+   * endpoint (LocalStack is the CI harness). The host owns credentials,
+   * endpoint, and networking; this package never reads environment secrets
+   * itself.
    */
   readonly client: S3Client;
   /**
@@ -53,14 +54,14 @@ export interface CloudflareR2BlobStoreOptions {
    */
   readonly backendId?: string;
   /**
-   * R2 account endpoint (or other S3-compatible base URL) used to form the
-   * default {@link backendId} as `r2|<endpoint>|<bucket>`. Does not change
+   * S3 endpoint (or other S3-compatible base URL) used to form the
+   * default {@link backendId} as `s3|<endpoint>|<bucket>`. Does not change
    * request routing — configure that on the {@link S3Client}.
    */
   readonly endpoint?: string;
 }
 
-interface R2ListCursor {
+interface S3ListCursor {
   readonly backendId: string;
   readonly continuation: string;
 }
@@ -236,18 +237,18 @@ async function readBody(
 }
 
 function encodeListCursor(backendId: string, continuation: string): string {
-  return `${R2_LIST_CURSOR_PREFIX}${encodeURIComponent(
-    JSON.stringify({ backendId, continuation } satisfies R2ListCursor),
+  return `${S3_LIST_CURSOR_PREFIX}${encodeURIComponent(
+    JSON.stringify({ backendId, continuation } satisfies S3ListCursor),
   )}`;
 }
 
 function decodeListCursor(backendId: string, cursor: string): string {
   try {
-    if (!cursor.startsWith(R2_LIST_CURSOR_PREFIX)) {
+    if (!cursor.startsWith(S3_LIST_CURSOR_PREFIX)) {
       throw new Error("wrong cursor kind");
     }
     const parsed = JSON.parse(
-      decodeURIComponent(cursor.slice(R2_LIST_CURSOR_PREFIX.length)),
+      decodeURIComponent(cursor.slice(S3_LIST_CURSOR_PREFIX.length)),
     ) as unknown;
     if (
       typeof parsed !== "object" ||
@@ -256,7 +257,7 @@ function decodeListCursor(backendId: string, cursor: string): string {
     ) {
       throw new Error("wrong cursor shape");
     }
-    const value = parsed as Partial<R2ListCursor>;
+    const value = parsed as Partial<S3ListCursor>;
     if (
       value.backendId !== backendId ||
       typeof value.continuation !== "string" ||
@@ -286,7 +287,7 @@ function metadataFromS3(
 function requireEtag(etag: string | undefined, key: string): string {
   if (etag === undefined || etag.length === 0) {
     throw new BlobStoreError(
-      `R2 returned no etag for object ${JSON.stringify(key)}.`,
+      `S3 returned no etag for object ${JSON.stringify(key)}.`,
     );
   }
   return etag;
@@ -319,16 +320,12 @@ function emptyBodyStream(): ReadableStream<Uint8Array> {
 }
 
 /**
- * Creates a {@link BlobStore} bound to one Cloudflare R2 bucket via the
- * S3-compatible API.
+ * Creates a {@link BlobStore} bound to one S3 bucket (AWS or S3-compatible).
  *
- * Verified against LocalStack S3 (S3-compatible) in this repository. Pass a
- * host-configured {@link S3Client} aimed at R2; do not embed credentials in
+ * Verified against LocalStack S3 in this repository. Pass a host-configured {@link S3Client}; do not embed credentials in
  * this package.
  */
-export function createCloudflareR2BlobStore(
-  options: CloudflareR2BlobStoreOptions,
-): BlobStore {
+export function createS3BlobStore(options: S3BlobStoreOptions): BlobStore {
   const maxObjectBytes = options.maxObjectBytes ?? DEFAULT_MAX_OBJECT_BYTES;
   if (!Number.isInteger(maxObjectBytes) || maxObjectBytes < 0) {
     throw new BlobValidationError(
@@ -350,7 +347,9 @@ export function createCloudflareR2BlobStore(
 
   const client = options.client;
   const bucket = options.bucket;
-  const backendId = options.backendId ?? `r2|${options.endpoint}|${bucket}`;
+  const backendId = options.backendId ?? `s3|${options.endpoint}|${bucket}`;
+  // After a successful object op or HeadBucket, further key-miss paths skip
+  // HeadBucket (NoSuchKey already proves the bucket exists).
   let bucketVerified = false;
 
   /**
@@ -377,12 +376,12 @@ export function createCloudflareR2BlobStore(
         statusCode(bucketError) === 403
       ) {
         throw new BlobStoreError(
-          `R2 bucket ${JSON.stringify(bucket)} is missing or inaccessible.`,
+          `S3 bucket ${JSON.stringify(bucket)} is missing or inaccessible.`,
           { cause: bucketError },
         );
       }
       throw new BlobStoreError(
-        `R2 bucket check failed for ${JSON.stringify(bucket)}.`,
+        `S3 bucket check failed for ${JSON.stringify(bucket)}.`,
         { cause: bucketError },
       );
     }
@@ -405,7 +404,7 @@ export function createCloudflareR2BlobStore(
         await assertBucketPresent(error);
         return null;
       }
-      throw new BlobStoreError(`R2 head failed for ${JSON.stringify(key)}.`, {
+      throw new BlobStoreError(`S3 head failed for ${JSON.stringify(key)}.`, {
         cause: error,
       });
     }
@@ -468,7 +467,7 @@ export function createCloudflareR2BlobStore(
           const head = await headRaw(key);
           if (head === null) {
             throw new BlobStoreError(
-              `R2 put returned no etag and object is missing for ${JSON.stringify(key)}.`,
+              `S3 put returned no etag and object is missing for ${JSON.stringify(key)}.`,
             );
           }
           return { ok: true, etag: head.etag, size: bytes.byteLength };
@@ -483,8 +482,8 @@ export function createCloudflareR2BlobStore(
           return { ok: false, reason: "exists" };
         }
         if (ifNoneMatch === "*" && isConflict(error)) {
-          // ConditionalRequestConflict (409) is retryable on S3-compatible
-          // APIs, not proof the key exists. Diagnose, then retry once.
+          // AWS documents ConditionalRequestConflict (409) as retryable, not
+          // proof the key exists. Diagnose, then retry create-only once.
           const head = await headRaw(key);
           if (head !== null) {
             return { ok: false, reason: "exists" };
@@ -501,7 +500,7 @@ export function createCloudflareR2BlobStore(
               }
             }
             throw new BlobStoreError(
-              `R2 put failed for ${JSON.stringify(key)}.`,
+              `S3 put failed for ${JSON.stringify(key)}.`,
               { cause: retryError },
             );
           }
@@ -519,6 +518,7 @@ export function createCloudflareR2BlobStore(
               return { ok: false, reason: "missing" };
             }
             if (isConflict(error) && head.etag === ifMatch) {
+              // 409 is retryable; etag still matches — try once more.
               try {
                 return await finishPut(
                   await client.send(new PutObjectCommand(input)),
@@ -537,14 +537,14 @@ export function createCloudflareR2BlobStore(
                   }
                   if (after.etag === ifMatch && isConflict(retryError)) {
                     throw new BlobStoreError(
-                      `R2 put conflict persisted for ${JSON.stringify(key)}.`,
+                      `S3 put conflict persisted for ${JSON.stringify(key)}.`,
                       { cause: retryError },
                     );
                   }
                   return { ok: false, reason: "changed" };
                 }
                 throw new BlobStoreError(
-                  `R2 put failed for ${JSON.stringify(key)}.`,
+                  `S3 put failed for ${JSON.stringify(key)}.`,
                   { cause: retryError },
                 );
               }
@@ -555,12 +555,12 @@ export function createCloudflareR2BlobStore(
               throw headError;
             }
             throw new BlobStoreError(
-              `R2 put condition diagnostic failed for ${JSON.stringify(key)}.`,
+              `S3 put condition diagnostic failed for ${JSON.stringify(key)}.`,
               { cause: headError },
             );
           }
         }
-        throw new BlobStoreError(`R2 put failed for ${JSON.stringify(key)}.`, {
+        throw new BlobStoreError(`S3 put failed for ${JSON.stringify(key)}.`, {
           cause: error,
         });
       }
@@ -599,7 +599,7 @@ export function createCloudflareR2BlobStore(
                 for await (const chunk of iterable) {
                   if (!(chunk instanceof Uint8Array)) {
                     throw new BlobStoreError(
-                      `R2 get body chunk for ${JSON.stringify(key)} is not a Uint8Array.`,
+                      `S3 get body chunk for ${JSON.stringify(key)} is not a Uint8Array.`,
                     );
                   }
                   controller.enqueue(copyBytes(chunk));
@@ -616,7 +616,7 @@ export function createCloudflareR2BlobStore(
           await assertBucketPresent(error);
           return null;
         }
-        throw new BlobStoreError(`R2 get failed for ${JSON.stringify(key)}.`, {
+        throw new BlobStoreError(`S3 get failed for ${JSON.stringify(key)}.`, {
           cause: error,
         });
       }
@@ -674,12 +674,12 @@ export function createCloudflareR2BlobStore(
           (statusCode(error) === 400 || errorName(error) === "InvalidArgument")
         ) {
           throw new BlobStoreError(
-            `R2 conditional delete is not supported by this endpoint for ${JSON.stringify(key)}.`,
+            `S3 conditional delete is not supported by this endpoint for ${JSON.stringify(key)}.`,
             { cause: error },
           );
         }
         throw new BlobStoreError(
-          `R2 delete failed for ${JSON.stringify(key)}.`,
+          `S3 delete failed for ${JSON.stringify(key)}.`,
           { cause: error },
         );
       }
@@ -721,7 +721,7 @@ export function createCloudflareR2BlobStore(
           const key = item.Key;
           if (key === undefined || key.length === 0) {
             throw new BlobStoreError(
-              "R2 list returned an object without a key.",
+              "S3 list returned an object without a key.",
             );
           }
           return {
@@ -746,7 +746,7 @@ export function createCloudflareR2BlobStore(
         ) {
           throw error;
         }
-        throw new BlobStoreError("R2 list failed.", { cause: error });
+        throw new BlobStoreError("S3 list failed.", { cause: error });
       }
     },
   };

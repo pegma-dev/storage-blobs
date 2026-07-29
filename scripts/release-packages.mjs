@@ -30,6 +30,10 @@ export const RELEASE_PACKAGES = [
     directory: "storage-cloudflare-r2",
     name: "@pegma/storage-cloudflare-r2",
   },
+  {
+    directory: "storage-s3",
+    name: "@pegma/storage-s3",
+  },
 ];
 
 function fail(message) {

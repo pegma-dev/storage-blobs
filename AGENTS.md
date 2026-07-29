@@ -87,9 +87,9 @@ OIDC authority. See `docs/RELEASING.md`.
 Port, memory store, frozen conformance suite, the Azure Blob adapter
 (`@pegma/storage-azure-blob`, Azurite in CI), and the Cloudflare R2 adapter
 (`@pegma/storage-cloudflare-r2`, LocalStack S3-compatible harness in CI) are
-implemented. The S3 adapter and the first publish are still open. Track work
-in `docs/PROJECT_PLAN.md`. See `docs/ADAPTER_AUTHORING.md` before adding a
-backend.
+implemented, as is the S3 adapter (`@pegma/storage-s3`, LocalStack in CI). The
+first publish is still open. Track work in `docs/PROJECT_PLAN.md`. See
+`docs/ADAPTER_AUTHORING.md` before adding a backend.
 
 Siblings: [storage-core](https://github.com/pegma-dev/storage-core),
 [spine](https://github.com/pegma-dev/spine),
