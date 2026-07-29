@@ -446,8 +446,9 @@ export function createS3BlobStore(options: S3BlobStoreOptions): BlobStore {
         input.IfMatch = ifMatch;
       }
 
-      try {
-        const response = await client.send(new PutObjectCommand(input));
+      const finishPut = async (response: {
+        ETag?: string | undefined;
+      }): Promise<PutResult> => {
         const etag = response.ETag;
         if (etag === undefined || etag.length === 0) {
           // Some S3-compatible servers omit ETag on put; re-read via HEAD.
@@ -460,12 +461,37 @@ export function createS3BlobStore(options: S3BlobStoreOptions): BlobStore {
           return { ok: true, etag: head.etag, size: bytes.byteLength };
         }
         return { ok: true, etag, size: bytes.byteLength };
+      };
+
+      try {
+        return await finishPut(await client.send(new PutObjectCommand(input)));
       } catch (error) {
-        if (
-          ifNoneMatch === "*" &&
-          (isPreconditionFailed(error) || isConflict(error))
-        ) {
+        if (ifNoneMatch === "*" && isPreconditionFailed(error)) {
           return { ok: false, reason: "exists" };
+        }
+        if (ifNoneMatch === "*" && isConflict(error)) {
+          // AWS documents ConditionalRequestConflict (409) as retryable, not
+          // proof the key exists. Diagnose, then retry create-only once.
+          const head = await headRaw(key);
+          if (head !== null) {
+            return { ok: false, reason: "exists" };
+          }
+          try {
+            return await finishPut(
+              await client.send(new PutObjectCommand(input)),
+            );
+          } catch (retryError) {
+            if (isPreconditionFailed(retryError) || isConflict(retryError)) {
+              const after = await headRaw(key);
+              if (after !== null) {
+                return { ok: false, reason: "exists" };
+              }
+            }
+            throw new BlobStoreError(
+              `S3 put failed for ${JSON.stringify(key)}.`,
+              { cause: retryError },
+            );
+          }
         }
         if (
           ifMatch !== undefined &&
