@@ -72,13 +72,21 @@ describe("my adapter", () => {
 
   for (const testCase of sizeLimitConformanceCases) {
     it(testCase.name, async () => {
-      await testCase.run(async (limitBytes) => {
-        // Each limitBytes invocation may use its own empty backend.
-        return createMyBlobStore({
-          maxObjectBytes: limitBytes,
-          bucket: await provisionEmptyBucket(),
+      // Factory must return BlobStore synchronously (not a Promise).
+      const buckets: Awaited<ReturnType<typeof provisionEmptyBucket>>[] = [];
+      try {
+        await testCase.run((limitBytes) => {
+          // Synchronous: provision must complete before run, or use a
+          // pre-created pool. Here we block via a sync helper your harness owns.
+          const bucket = provisionEmptyBucketSync();
+          buckets.push(bucket);
+          return createMyBlobStore({ maxObjectBytes: limitBytes, bucket });
         });
-      });
+      } finally {
+        for (const bucket of buckets) {
+          await destroyBucket(bucket);
+        }
+      }
     });
   }
 
