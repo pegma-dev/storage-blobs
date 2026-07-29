@@ -96,3 +96,26 @@ describe("createMemoryBlobStore options", () => {
     );
   });
 });
+
+describe("memory put body isolation", () => {
+  it("copies Node Buffer inputs without sharing the underlying memory", async () => {
+    const store = createMemoryBlobStore();
+    const body = Buffer.from([10, 20, 30]);
+    const put = await store.put("buffer/copy", body);
+    expect(put.ok).toBe(true);
+    body[0] = 255;
+    const got = await store.get("buffer/copy");
+    expect(got).not.toBeNull();
+    const reader = got!.body.getReader();
+    const chunks: Uint8Array[] = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      chunks.push(value);
+    }
+    const bytes = chunks[0]!;
+    expect([...bytes]).toEqual([10, 20, 30]);
+  });
+});

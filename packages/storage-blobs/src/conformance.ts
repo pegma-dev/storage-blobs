@@ -5,7 +5,9 @@ import {
   BlobValidationError,
   DEFAULT_CONTENT_TYPE,
   MAX_BLOB_KEY_BYTES,
+  MAX_BLOB_KEY_SEGMENTS,
   MAX_LIST_PAGE_SIZE,
+  MAX_USER_METADATA_TOTAL_BYTES,
   type BlobStore,
 } from "./index.js";
 
@@ -469,6 +471,59 @@ export const conformanceCases: readonly ConformanceCase[] = [
       (error: unknown) => error instanceof BlobValidationError,
     );
   }),
+
+  testCase("rejects non-ASCII user-metadata values", async (store) => {
+    await assert.rejects(
+      () =>
+        store.put("meta/nonascii", textBytes("x"), {
+          userMetadata: { label: "caf\u00e9" },
+        }),
+      (error: unknown) => error instanceof BlobValidationError,
+    );
+  }),
+
+  testCase(
+    "rejects user metadata over the aggregate byte budget",
+    async (store) => {
+      // 8 entries of 256-byte values exceed the 2 KiB S3 budget.
+      const userMetadata: Record<string, string> = {};
+      for (let index = 0; index < 8; index += 1) {
+        userMetadata[`k${index}`] = "v".repeat(256);
+      }
+      let total = 0;
+      for (const [key, value] of Object.entries(userMetadata)) {
+        total += new TextEncoder().encode(key).byteLength;
+        total += new TextEncoder().encode(value).byteLength;
+      }
+      assert.equal(total > MAX_USER_METADATA_TOTAL_BYTES, true);
+      await assert.rejects(
+        () => store.put("meta/too-big", textBytes("x"), { userMetadata }),
+        (error: unknown) => error instanceof BlobValidationError,
+      );
+    },
+  ),
+
+  testCase("rejects a key with too many path segments", async (store) => {
+    const key = `${"a/".repeat(MAX_BLOB_KEY_SEGMENTS)}z`;
+    assert.equal(key.split("/").length, MAX_BLOB_KEY_SEGMENTS + 1);
+    await assert.rejects(
+      () => store.put(key, textBytes("x")),
+      (error: unknown) => error instanceof BlobValidationError,
+    );
+  }),
+
+  testCase(
+    "put copies body bytes so later mutation is invisible",
+    async (store) => {
+      const body = new Uint8Array([1, 2, 3, 4]);
+      const put = await store.put("copy/me", body);
+      assert.equal(put.ok, true);
+      body[0] = 99;
+      const got = await store.get("copy/me");
+      assert.ok(got);
+      assertBytesEqual(await readAll(got.body), new Uint8Array([1, 2, 3, 4]));
+    },
+  ),
 ];
 
 /**

@@ -27,6 +27,18 @@ export const MAX_USER_METADATA_KEY_BYTES = 64;
 /** Maximum UTF-8 byte length of a user-metadata value. */
 export const MAX_USER_METADATA_VALUE_BYTES = 256;
 
+/**
+ * Maximum combined UTF-8 byte length of all user-metadata keys and values
+ * (S3's 2 KiB user-metadata budget is the tightest first-class backend).
+ */
+export const MAX_USER_METADATA_TOTAL_BYTES = 2 * 1_024;
+
+/**
+ * Maximum number of `/`-separated path segments in a key or prefix (Azure
+ * Blob flat-namespace limit is the tightest first-class backend).
+ */
+export const MAX_BLOB_KEY_SEGMENTS = 254;
+
 /** Maximum UTF-8 byte length of a stored content-type. */
 export const MAX_CONTENT_TYPE_BYTES = 256;
 
@@ -302,6 +314,34 @@ function assertBlobPathString(value: string, label: string): void {
       `${label} exceeds ${MAX_BLOB_KEY_BYTES} UTF-8 bytes.`,
     );
   }
+  // Azure Blob rejects names with more than 254 path segments.
+  const segments = value.split("/").length;
+  if (segments > MAX_BLOB_KEY_SEGMENTS) {
+    throw new BlobValidationError(
+      `${label} may have at most ${MAX_BLOB_KEY_SEGMENTS} path segments.`,
+    );
+  }
+}
+
+/** True when every code unit is a printable ASCII character (0x20–0x7E). */
+function isPrintableAscii(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 0x20 || code > 0x7e) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Copies bytes without calling the input's `slice` method. Node `Buffer.slice`
+ * returns a shared view; callers must not be able to mutate stored objects.
+ */
+function copyBytes(source: Uint8Array): Uint8Array {
+  const copy = new Uint8Array(source.byteLength);
+  copy.set(source);
+  return copy;
 }
 
 /**
@@ -368,13 +408,15 @@ function normalizeUserMetadata(
     );
   }
   const normalized: Record<string, string> = {};
+  let totalBytes = 0;
   for (const [rawKey, value] of entries) {
     if (!USER_METADATA_KEY.test(rawKey)) {
       throw new BlobValidationError(
         `User metadata key ${JSON.stringify(rawKey)} must match ${USER_METADATA_KEY.source}.`,
       );
     }
-    if (utf8ByteLength(rawKey) > MAX_USER_METADATA_KEY_BYTES) {
+    const keyBytes = utf8ByteLength(rawKey);
+    if (keyBytes > MAX_USER_METADATA_KEY_BYTES) {
       throw new BlobValidationError(
         `User metadata key exceeds ${MAX_USER_METADATA_KEY_BYTES} UTF-8 bytes.`,
       );
@@ -384,16 +426,14 @@ function normalizeUserMetadata(
         `User metadata value for ${JSON.stringify(rawKey)} must be a string.`,
       );
     }
-    assertWellFormedUnicode(
-      value,
-      `User metadata value for ${JSON.stringify(rawKey)}`,
-    );
-    if (hasDisallowedControl(value)) {
+    // Azure Blob metadata values must be ASCII; keep the port honest.
+    if (!isPrintableAscii(value)) {
       throw new BlobValidationError(
-        `User metadata value for ${JSON.stringify(rawKey)} must not contain control characters.`,
+        `User metadata value for ${JSON.stringify(rawKey)} must be printable ASCII.`,
       );
     }
-    if (utf8ByteLength(value) > MAX_USER_METADATA_VALUE_BYTES) {
+    const valueBytes = utf8ByteLength(value);
+    if (valueBytes > MAX_USER_METADATA_VALUE_BYTES) {
       throw new BlobValidationError(
         `User metadata value for ${JSON.stringify(rawKey)} exceeds ${MAX_USER_METADATA_VALUE_BYTES} UTF-8 bytes.`,
       );
@@ -401,6 +441,12 @@ function normalizeUserMetadata(
     if (Object.hasOwn(normalized, rawKey)) {
       throw new BlobValidationError(
         `User metadata key ${JSON.stringify(rawKey)} is duplicated.`,
+      );
+    }
+    totalBytes += keyBytes + valueBytes;
+    if (totalBytes > MAX_USER_METADATA_TOTAL_BYTES) {
+      throw new BlobValidationError(
+        `User metadata exceeds ${MAX_USER_METADATA_TOTAL_BYTES} UTF-8 bytes in total.`,
       );
     }
     normalized[rawKey] = value;
@@ -496,7 +542,8 @@ async function readBody(
       throw new BlobSizeLimitError(limitBytes);
     }
     // Copy so the caller cannot mutate stored bytes through the input buffer.
-    return body.slice();
+    // Avoid `body.slice()`: Node Buffer.slice returns a shared view.
+    return copyBytes(body);
   }
 
   const reader = body.getReader();
@@ -540,7 +587,7 @@ async function readBody(
     return new Uint8Array(0);
   }
   if (chunks.length === 1) {
-    return chunks[0]!.slice();
+    return copyBytes(chunks[0]!);
   }
   const bytes = new Uint8Array(total);
   let offset = 0;
@@ -553,7 +600,7 @@ async function readBody(
 
 function bytesToStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
   // Snapshot copy so a later replace does not mutate an outstanding stream.
-  const snapshot = bytes.slice();
+  const snapshot = copyBytes(bytes);
   let offset = 0;
   return new ReadableStream<Uint8Array>({
     pull(controller) {
