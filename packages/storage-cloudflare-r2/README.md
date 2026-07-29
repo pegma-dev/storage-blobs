@@ -37,8 +37,8 @@ const blobs = createCloudflareR2BlobStore({
 
 One store instance binds to **one bucket**. Namespace with key prefixes. The
 host owns the `S3Client` (credentials, endpoint, retry policy); this package
-never reads environment secrets itself. Pass `endpoint` (or `backendId`) so
-list cursors cannot cross accounts that reuse a bucket name.
+never reads environment secrets itself. `endpoint` or `backendId` is **required** so list cursors cannot cross accounts
+that reuse a bucket name.
 
 ## Conformance
 

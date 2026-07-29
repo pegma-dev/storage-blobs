@@ -1,6 +1,7 @@
 import {
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadBucketCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
@@ -46,17 +47,15 @@ export interface CloudflareR2BlobStoreOptions {
    */
   readonly maxObjectBytes?: number;
   /**
-   * Stable identity bound into list cursors. Defaults to
-   * `r2|<endpoint>|<bucket>` when {@link endpoint} is set, otherwise
-   * `r2|<bucket>`. Pass an explicit value (or {@link endpoint}) whenever the
-   * same bucket name may exist on more than one account or endpoint so foreign
-   * cursors reject with {@link BlobValidationError}.
+   * Stable identity bound into list cursors. Provide this **or**
+   * {@link endpoint} (at least one is required) so cursors cannot cross
+   * accounts that reuse a bucket name.
    */
   readonly backendId?: string;
   /**
-   * R2 account endpoint (or other S3-compatible base URL) used only to form the
-   * default {@link backendId}. Does not change request routing — configure that
-   * on the {@link S3Client}.
+   * R2 account endpoint (or other S3-compatible base URL) used to form the
+   * default {@link backendId} as `r2|<endpoint>|<bucket>`. Does not change
+   * request routing — configure that on the {@link S3Client}.
    */
   readonly endpoint?: string;
 }
@@ -343,17 +342,45 @@ export function createCloudflareR2BlobStore(
   if (options.endpoint !== undefined && options.endpoint.length === 0) {
     throw new BlobValidationError("endpoint must be a non-empty string.");
   }
+  if (options.backendId === undefined && options.endpoint === undefined) {
+    throw new BlobValidationError(
+      "Provide endpoint or backendId so list cursors are bound to this account.",
+    );
+  }
 
   const client = options.client;
   const bucket = options.bucket;
-  // Prefer host-supplied backendId/endpoint so cursors cannot cross accounts
-  // that reuse a conventional bucket name. Dual-store conformance uses two
-  // distinct buckets, which is enough for that suite when endpoint is omitted.
-  const backendId =
-    options.backendId ??
-    (options.endpoint !== undefined
-      ? `r2|${options.endpoint}|${bucket}`
-      : `r2|${bucket}`);
+  const backendId = options.backendId ?? `r2|${options.endpoint}|${bucket}`;
+
+  /**
+   * Object-level 404s are sometimes returned as bare NotFound for both a free
+   * key and a missing bucket. Confirm the bucket still exists before treating
+   * the key as free.
+   */
+  async function assertBucketPresent(objectError: unknown): Promise<void> {
+    const name = errorName(objectError);
+    if (name === "NoSuchKey") {
+      return;
+    }
+    try {
+      await client.send(new HeadBucketCommand({ Bucket: bucket }));
+    } catch (bucketError) {
+      if (
+        isNoSuchBucket(bucketError) ||
+        statusCode(bucketError) === 404 ||
+        statusCode(bucketError) === 403
+      ) {
+        throw new BlobStoreError(
+          `R2 bucket ${JSON.stringify(bucket)} is missing or inaccessible.`,
+          { cause: bucketError },
+        );
+      }
+      throw new BlobStoreError(
+        `R2 bucket check failed for ${JSON.stringify(bucket)}.`,
+        { cause: bucketError },
+      );
+    }
+  }
 
   async function headRaw(key: string): Promise<BlobObjectInfo | null> {
     try {
@@ -368,6 +395,7 @@ export function createCloudflareR2BlobStore(
       });
     } catch (error) {
       if (isNotFound(error)) {
+        await assertBucketPresent(error);
         return null;
       }
       throw new BlobStoreError(`R2 head failed for ${JSON.stringify(key)}.`, {
@@ -520,6 +548,7 @@ export function createCloudflareR2BlobStore(
         };
       } catch (error) {
         if (isNotFound(error)) {
+          await assertBucketPresent(error);
           return null;
         }
         throw new BlobStoreError(`R2 get failed for ${JSON.stringify(key)}.`, {
