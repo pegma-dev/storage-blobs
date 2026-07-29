@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "./packages/storage-blobs" },
-    { "path": "./packages/storage-azure-blob" }
+    { "path": "./packages/storage-azure-blob" },
+    { "path": "./packages/storage-cloudflare-r2" }
   ]
 }

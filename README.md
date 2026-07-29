@@ -29,7 +29,7 @@ application path.
 | ------------------------------ | ------------------------------------- | ------- |
 | `@pegma/storage-blobs`         | Port, memory store, conformance suite | In tree |
 | `@pegma/storage-azure-blob`    | Azure Blob Storage adapter            | In tree |
-| `@pegma/storage-cloudflare-r2` | Cloudflare R2 adapter                 | Planned |
+| `@pegma/storage-cloudflare-r2` | Cloudflare R2 adapter                 | In tree |
 | `@pegma/storage-s3`            | AWS S3 / S3-compatible adapter        | Planned |
 
 ## Constraint that shapes everything

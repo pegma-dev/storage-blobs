@@ -2,9 +2,9 @@
 
 ## Status
 
-**Stage:** Phase 3 complete on the Azure track. Port, frozen suite, and Azure
-Blob adapter (Azurite-proven) land; R2/S3 adapters and npm publication are
-still open.
+**Stage:** Phase 4 complete on the R2 track. Port, frozen suite, Azure Blob
+(Azurite), and Cloudflare R2 (LocalStack S3-compatible harness) land; S3
+adapter and npm publication are still open.
 
 **Package (planned first release):** `@pegma/storage-blobs@0.1.0`
 
@@ -202,10 +202,10 @@ further port methods require suite additions in the same change.
 
 **Exit criterion:** suite green on Azurite in CI.
 
-### Phase 4 — Cloudflare R2 adapter
+### Phase 4 — Cloudflare R2 adapter (done)
 
 - `@pegma/storage-cloudflare-r2` against a real empty bucket or approved local
-  harness.
+  harness (LocalStack S3-compatible in CI).
 - Forces the port to stay honest under S3-compatible R2 semantics.
 
 **Exit criterion:** suite green on R2 (or documented equivalent) in CI.

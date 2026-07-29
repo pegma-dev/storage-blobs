@@ -40,6 +40,7 @@ describe("release package metadata", () => {
     expect(RELEASE_PACKAGES.map(({ name }) => name)).toEqual([
       "@pegma/storage-blobs",
       "@pegma/storage-azure-blob",
+      "@pegma/storage-cloudflare-r2",
     ]);
   });
 

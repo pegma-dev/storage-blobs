@@ -26,6 +26,10 @@ export const RELEASE_PACKAGES = [
     directory: "storage-azure-blob",
     name: "@pegma/storage-azure-blob",
   },
+  {
+    directory: "storage-cloudflare-r2",
+    name: "@pegma/storage-cloudflare-r2",
+  },
 ];
 
 function fail(message) {
