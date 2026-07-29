@@ -354,8 +354,7 @@ async function smokeTestTarball(tarball, manifest) {
 }
 
 export async function prepareRelease(options = {}) {
-  const { root, manifest, packageDirectory, releaseTag } =
-    await validateRepository(options);
+  const { root, packages, releaseTag } = await validateRepository(options);
   const gitCommit = run(gitCommand(), ["rev-parse", "HEAD"], {
     cwd: root,
     capture: true,
@@ -367,44 +366,51 @@ export async function prepareRelease(options = {}) {
   }
 
   runNpm(["run", "build"], { cwd: root });
-  const result = runNpm(
-    ["pack", packageDirectory, "--json", "--pack-destination", output],
-    { cwd: root, capture: true },
-  );
-  const [packed] = JSON.parse(result.stdout);
-  if (
-    packed?.name !== manifest.name ||
-    packed?.version !== manifest.version ||
-    typeof packed.filename !== "string" ||
-    !Array.isArray(packed.files)
-  ) {
-    fail("npm pack returned invalid metadata");
-  }
-  verifyPackedFiles(manifest, packed.files);
-  const tarballPath = join(output, basename(packed.filename));
-  const hashes = hashTarball(await readFile(tarballPath));
-  if (
-    !safeEqual(hashes.integrity, packed.integrity) ||
-    !safeEqual(hashes.shasum, packed.shasum)
-  ) {
-    fail("tarball hashes do not match npm pack metadata");
-  }
-  await smokeTestTarball(tarballPath, manifest);
 
-  const prepared = {
-    schemaVersion: 1,
-    gitCommit,
-    releaseTag: releaseTag ?? null,
-    package: {
-      name: manifest.name,
-      version: manifest.version,
+  const preparedPackages = [];
+  for (const entry of packages) {
+    const result = runNpm(
+      ["pack", entry.packageDirectory, "--json", "--pack-destination", output],
+      { cwd: root, capture: true },
+    );
+    const [packed] = JSON.parse(result.stdout);
+    if (
+      packed?.name !== entry.manifest.name ||
+      packed?.version !== entry.manifest.version ||
+      typeof packed.filename !== "string" ||
+      !Array.isArray(packed.files)
+    ) {
+      fail(`npm pack returned invalid metadata for ${entry.manifest.name}`);
+    }
+    verifyPackedFiles(entry.manifest, packed.files);
+    const tarballPath = join(output, basename(packed.filename));
+    const hashes = hashTarball(await readFile(tarballPath));
+    if (
+      !safeEqual(hashes.integrity, packed.integrity) ||
+      !safeEqual(hashes.shasum, packed.shasum)
+    ) {
+      fail(
+        `tarball hashes do not match npm pack metadata for ${entry.manifest.name}`,
+      );
+    }
+    await smokeTestTarball(tarballPath, entry.manifest);
+    preparedPackages.push({
+      name: entry.manifest.name,
+      version: entry.manifest.version,
       tarball: basename(tarballPath),
       integrity: hashes.integrity,
       shasum: hashes.shasum,
       files: packed.files
         .map(({ path, size }) => ({ path, size }))
         .sort((left, right) => left.path.localeCompare(right.path)),
-    },
+    });
+  }
+
+  const prepared = {
+    schemaVersion: 2,
+    gitCommit,
+    releaseTag: releaseTag ?? null,
+    packages: preparedPackages,
   };
   const manifestPath = join(output, "package-manifest.json");
   await writeFile(manifestPath, `${JSON.stringify(prepared, null, 2)}\n`);
@@ -466,16 +472,12 @@ function confirmRegistryIntegrity(record) {
 
 async function verifyPreparedManifest(path) {
   const prepared = await readJson(path);
-  const record = prepared.package;
+  const records = prepared.packages;
   if (
-    prepared.schemaVersion !== 1 ||
+    prepared.schemaVersion !== 2 ||
     !/^[0-9a-f]{40,64}$/u.test(prepared.gitCommit) ||
-    prepared.releaseTag !== `v${record?.version}` ||
-    record?.name !== PACKAGE.name ||
-    !STABLE_SEMVER.test(record.version) ||
-    typeof record.integrity !== "string" ||
-    typeof record.shasum !== "string" ||
-    !Array.isArray(record.files)
+    !Array.isArray(records) ||
+    records.length !== RELEASE_PACKAGES.length
   ) {
     fail("prepared package manifest is invalid");
   }
@@ -486,21 +488,37 @@ async function verifyPreparedManifest(path) {
   if (!safeEqual(currentCommit, prepared.gitCommit)) {
     fail("prepared package manifest commit does not match the checkout");
   }
-  const expectedTarball = `${PACKAGE.name
-    .slice(1)
-    .replace("/", "-")}-${record.version}.tgz`;
-  if (record.tarball !== expectedTarball)
-    fail("prepared tarball name is invalid");
-  const tarball = resolve(dirname(path), record.tarball);
-  if (dirname(tarball) !== resolve(dirname(path))) {
-    fail("prepared tarball must be beside the package manifest");
-  }
-  const hashes = hashTarball(await readFile(tarball));
-  if (
-    !safeEqual(hashes.integrity, record.integrity) ||
-    !safeEqual(hashes.shasum, record.shasum)
-  ) {
-    fail("prepared tarball has changed");
+
+  for (let index = 0; index < RELEASE_PACKAGES.length; index += 1) {
+    const definition = RELEASE_PACKAGES[index];
+    const record = records[index];
+    if (
+      prepared.releaseTag !== `v${record?.version}` ||
+      record?.name !== definition.name ||
+      !STABLE_SEMVER.test(record.version) ||
+      typeof record.integrity !== "string" ||
+      typeof record.shasum !== "string" ||
+      !Array.isArray(record.files)
+    ) {
+      fail(`prepared package record is invalid for ${definition.name}`);
+    }
+    const expectedTarball = `${definition.name
+      .slice(1)
+      .replace("/", "-")}-${record.version}.tgz`;
+    if (record.tarball !== expectedTarball) {
+      fail(`prepared tarball name is invalid for ${definition.name}`);
+    }
+    const tarball = resolve(dirname(path), record.tarball);
+    if (dirname(tarball) !== resolve(dirname(path))) {
+      fail("prepared tarball must be beside the package manifest");
+    }
+    const hashes = hashTarball(await readFile(tarball));
+    if (
+      !safeEqual(hashes.integrity, record.integrity) ||
+      !safeEqual(hashes.shasum, record.shasum)
+    ) {
+      fail(`prepared tarball has changed for ${definition.name}`);
+    }
   }
   return prepared;
 }
@@ -529,28 +547,29 @@ export async function publishPreparedRelease(options = {}) {
     fail("prepared package manifest must match the release event commit");
   }
 
-  const record = prepared.package;
-  const decision = decidePublication(
-    record.integrity,
-    queryRegistryIntegrity(record.name, record.version),
-  );
-  if (decision === "skip") {
-    process.stdout.write(
-      `Verified existing ${record.name}@${record.version}; skipping.\n`,
+  for (const record of prepared.packages) {
+    const decision = decidePublication(
+      record.integrity,
+      queryRegistryIntegrity(record.name, record.version),
     );
-    return;
+    if (decision === "skip") {
+      process.stdout.write(
+        `Verified existing ${record.name}@${record.version}; skipping.\n`,
+      );
+      continue;
+    }
+    runNpm(
+      [
+        "publish",
+        resolve(dirname(path), record.tarball),
+        "--access",
+        "public",
+        "--provenance",
+      ],
+      { cwd: dirname(path) },
+    );
+    confirmRegistryIntegrity(record);
   }
-  runNpm(
-    [
-      "publish",
-      resolve(dirname(path), record.tarball),
-      "--access",
-      "public",
-      "--provenance",
-    ],
-    { cwd: dirname(path) },
-  );
-  confirmRegistryIntegrity(record);
 }
 
 export function parseArguments(arguments_) {

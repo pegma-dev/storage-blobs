@@ -47,7 +47,7 @@ export interface AzureBlobStoreOptions {
 }
 
 interface AzureListCursor {
-  readonly container: string;
+  readonly backendId: string;
   readonly continuation: string;
 }
 
@@ -175,13 +175,13 @@ function nodeStreamToWeb(
   ) as ReadableStream<Uint8Array>;
 }
 
-function encodeListCursor(container: string, continuation: string): string {
+function encodeListCursor(backendId: string, continuation: string): string {
   return `${AZURE_LIST_CURSOR_PREFIX}${encodeURIComponent(
-    JSON.stringify({ container, continuation } satisfies AzureListCursor),
+    JSON.stringify({ backendId, continuation } satisfies AzureListCursor),
   )}`;
 }
 
-function decodeListCursor(container: string, cursor: string): string {
+function decodeListCursor(backendId: string, cursor: string): string {
   try {
     if (!cursor.startsWith(AZURE_LIST_CURSOR_PREFIX)) {
       throw new Error("wrong cursor kind");
@@ -192,13 +192,13 @@ function decodeListCursor(container: string, cursor: string): string {
     if (
       typeof parsed !== "object" ||
       parsed === null ||
-      Object.keys(parsed).sort().join(",") !== "container,continuation"
+      Object.keys(parsed).sort().join(",") !== "backendId,continuation"
     ) {
       throw new Error("wrong cursor shape");
     }
     const value = parsed as Partial<AzureListCursor>;
     if (
-      value.container !== container ||
+      value.backendId !== backendId ||
       typeof value.continuation !== "string" ||
       value.continuation.length === 0
     ) {
@@ -265,6 +265,8 @@ export function createAzureBlobStore(
   const container = options.containerClient;
   const createIfMissing = options.createContainerIfMissing !== false;
   const containerName = container.containerName;
+  // Account/endpoint + container so cursors cannot cross stores that share a name.
+  const backendId = `${container.accountName ?? "account"}|${container.url}|${containerName}`;
   let ensureContainer: Promise<void> | undefined;
 
   async function ready(): Promise<void> {
@@ -342,11 +344,10 @@ export function createAzureBlobStore(
             return { ok: false, reason: "exists" };
           }
           if (ifMatch !== undefined) {
-            // 404-like missing under ifMatch often surfaces as 412 on Azure.
             if (isStatus(error, 404)) {
               return { ok: false, reason: "missing" };
             }
-            // Distinguish missing: head the blob.
+            // Distinguish missing vs changed only when HEAD succeeds or 404s.
             try {
               await blob.getProperties();
               return { ok: false, reason: "changed" };
@@ -354,7 +355,10 @@ export function createAzureBlobStore(
               if (isStatus(headError, 404)) {
                 return { ok: false, reason: "missing" };
               }
-              return { ok: false, reason: "changed" };
+              throw new BlobStoreError(
+                `Azure put condition diagnostic failed for ${JSON.stringify(key)}.`,
+                { cause: headError },
+              );
             }
           }
         }
@@ -459,7 +463,10 @@ export function createAzureBlobStore(
             if (isStatus(headError, 404)) {
               return { ok: false, reason: "missing" };
             }
-            return { ok: false, reason: "changed" };
+            throw new BlobStoreError(
+              `Azure delete condition diagnostic failed for ${JSON.stringify(key)}.`,
+              { cause: headError },
+            );
           }
         }
         throw new BlobStoreError(
@@ -486,7 +493,7 @@ export function createAzureBlobStore(
             "List cursor must be a non-empty string when provided.",
           );
         }
-        continuationToken = decodeListCursor(containerName, listOptions.cursor);
+        continuationToken = decodeListCursor(backendId, listOptions.cursor);
       }
 
       await ready();
@@ -527,7 +534,7 @@ export function createAzureBlobStore(
         const next =
           segment.continuationToken !== undefined &&
           segment.continuationToken.length > 0
-            ? encodeListCursor(containerName, segment.continuationToken)
+            ? encodeListCursor(backendId, segment.continuationToken)
             : null;
 
         return { objects, nextCursor: next };
