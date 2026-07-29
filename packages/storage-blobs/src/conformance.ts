@@ -544,10 +544,13 @@ export const concurrentConformanceCases: readonly ConformanceCase[] = [
   storeFactoryCase(
     "concurrent create-only puts: at most one succeeds",
     async (createStore) => {
-      const store = createStore();
+      // Each call must return a handle to the same empty physical backend so
+      // adapters cannot pass via instance-local serialization alone.
       const key = "race/create-only";
       const attempts = Array.from({ length: 8 }, (_, index) =>
-        store.put(key, textBytes(`writer-${index}`), { ifNoneMatch: "*" }),
+        createStore().put(key, textBytes(`writer-${index}`), {
+          ifNoneMatch: "*",
+        }),
       );
       const results = await Promise.all(attempts);
       const successes = results.filter((result) => result.ok);
@@ -560,7 +563,7 @@ export const concurrentConformanceCases: readonly ConformanceCase[] = [
           assert.equal(failure.reason, "exists");
         }
       }
-      const got = await store.get(key);
+      const got = await createStore().get(key);
       assert.ok(got);
       assert.equal(got.size > 0, true);
     },

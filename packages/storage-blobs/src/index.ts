@@ -242,10 +242,32 @@ interface StoredBlob {
 const MEMORY_LIST_CURSOR_PREFIX = "pegma-memory-blob-list-v1:";
 
 interface MemoryListCursor {
+  readonly storeId: string;
   readonly afterKey: string;
 }
 
 const textEncoder = new TextEncoder();
+
+function assertWellFormedUnicode(value: string, label: string): void {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (Number.isNaN(next) || next < 0xdc00 || next > 0xdfff) {
+        throw new BlobValidationError(
+          `${label} must be well-formed Unicode (unpaired surrogate).`,
+        );
+      }
+      index += 1;
+      continue;
+    }
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      throw new BlobValidationError(
+        `${label} must be well-formed Unicode (unpaired surrogate).`,
+      );
+    }
+  }
+}
 
 function utf8ByteLength(value: string): number {
   return textEncoder.encode(value).byteLength;
@@ -262,29 +284,38 @@ function hasDisallowedControl(value: string): boolean {
 }
 
 /**
+ * Shared character/length rules for keys and list prefixes (no exact-key
+ * exclusions such as `.` / `..`).
+ */
+function assertBlobPathString(value: string, label: string): void {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new BlobValidationError(`${label} must be a non-empty string.`);
+  }
+  assertWellFormedUnicode(value, label);
+  if (hasDisallowedControl(value)) {
+    throw new BlobValidationError(
+      `${label} must not contain control characters.`,
+    );
+  }
+  if (utf8ByteLength(value) > MAX_BLOB_KEY_BYTES) {
+    throw new BlobValidationError(
+      `${label} exceeds ${MAX_BLOB_KEY_BYTES} UTF-8 bytes.`,
+    );
+  }
+}
+
+/**
  * Validates an object key against the intersection every first-class adapter
  * can honour.
  *
  * Keys are non-empty, at most {@link MAX_BLOB_KEY_BYTES} UTF-8 bytes, free of
- * C0 controls and DEL, and must not be `.` or `..`.
+ * C0 controls and DEL, well-formed Unicode, and must not be `.` or `..`.
  */
 export function assertValidBlobKey(key: string): void {
-  if (typeof key !== "string" || key.length === 0) {
-    throw new BlobValidationError("Blob key must be a non-empty string.");
-  }
+  assertBlobPathString(key, "Blob key");
   if (key === "." || key === "..") {
     throw new BlobValidationError(
       `Blob key ${JSON.stringify(key)} is not allowed.`,
-    );
-  }
-  if (hasDisallowedControl(key)) {
-    throw new BlobValidationError(
-      "Blob key must not contain control characters.",
-    );
-  }
-  if (utf8ByteLength(key) > MAX_BLOB_KEY_BYTES) {
-    throw new BlobValidationError(
-      `Blob key exceeds ${MAX_BLOB_KEY_BYTES} UTF-8 bytes.`,
     );
   }
 }
@@ -292,15 +323,19 @@ export function assertValidBlobKey(key: string): void {
 /**
  * Validates a list prefix. Empty string means “no prefix” and is rejected here
  * so callers use `undefined` instead of `""`.
+ *
+ * Unlike object keys, the exact strings `.` and `..` are allowed as prefixes
+ * so keys such as `.hidden` remain listable.
  */
 export function assertValidBlobPrefix(prefix: string): void {
-  assertValidBlobKey(prefix);
+  assertBlobPathString(prefix, "List prefix");
 }
 
 function assertValidContentType(contentType: string): string {
   if (typeof contentType !== "string" || contentType.length === 0) {
     throw new BlobValidationError("Content-type must be a non-empty string.");
   }
+  assertWellFormedUnicode(contentType, "Content-type");
   if (hasDisallowedControl(contentType)) {
     throw new BlobValidationError(
       "Content-type must not contain control characters.",
@@ -314,7 +349,11 @@ function assertValidContentType(contentType: string): string {
   return contentType;
 }
 
-const USER_METADATA_KEY = /^[a-zA-Z][a-zA-Z0-9_]*$/;
+/**
+ * Portable user-metadata keys. Lowercase only: S3 lowercases metadata names,
+ * so mixed-case keys are not an honest intersection.
+ */
+const USER_METADATA_KEY = /^[a-z][a-z0-9_]*$/;
 
 function normalizeUserMetadata(
   input: Readonly<Record<string, string>> | undefined,
@@ -345,6 +384,10 @@ function normalizeUserMetadata(
         `User metadata value for ${JSON.stringify(rawKey)} must be a string.`,
       );
     }
+    assertWellFormedUnicode(
+      value,
+      `User metadata value for ${JSON.stringify(rawKey)}`,
+    );
     if (hasDisallowedControl(value)) {
       throw new BlobValidationError(
         `User metadata value for ${JSON.stringify(rawKey)} must not contain control characters.`,
@@ -404,13 +447,13 @@ function assertEtag(etag: string, label: string): void {
   }
 }
 
-function encodeMemoryListCursor(afterKey: string): string {
+function encodeMemoryListCursor(storeId: string, afterKey: string): string {
   return `${MEMORY_LIST_CURSOR_PREFIX}${encodeURIComponent(
-    JSON.stringify({ afterKey } satisfies MemoryListCursor),
+    JSON.stringify({ storeId, afterKey } satisfies MemoryListCursor),
   )}`;
 }
 
-function decodeMemoryListCursor(cursor: string): string {
+function decodeMemoryListCursor(storeId: string, cursor: string): string {
   try {
     if (!cursor.startsWith(MEMORY_LIST_CURSOR_PREFIX)) {
       throw new Error("wrong cursor kind");
@@ -421,13 +464,19 @@ function decodeMemoryListCursor(cursor: string): string {
     if (
       typeof parsed !== "object" ||
       parsed === null ||
-      Object.keys(parsed).sort().join(",") !== "afterKey"
+      Object.keys(parsed).sort().join(",") !== "afterKey,storeId"
     ) {
       throw new Error("wrong cursor shape");
     }
     const value = parsed as Partial<MemoryListCursor>;
-    if (typeof value.afterKey !== "string") {
+    if (
+      typeof value.afterKey !== "string" ||
+      typeof value.storeId !== "string"
+    ) {
       throw new Error("foreign cursor");
+    }
+    if (value.storeId !== storeId) {
+      throw new Error("foreign store");
     }
     return value.afterKey;
   } catch (error) {
@@ -548,6 +597,7 @@ export function createMemoryBlobStore(
     );
   }
 
+  const storeId = `mem-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   const objects = new Map<string, StoredBlob>();
   let etagGeneration = 0n;
 
@@ -678,7 +728,7 @@ export function createMemoryBlobStore(
             "List cursor must be a non-empty string when provided.",
           );
         }
-        afterKey = decodeMemoryListCursor(listOptions.cursor);
+        afterKey = decodeMemoryListCursor(storeId, listOptions.cursor);
       }
 
       const keys = [...objects.keys()].sort((left, right) =>
@@ -723,7 +773,7 @@ export function createMemoryBlobStore(
       }
       return {
         objects: page,
-        nextCursor: hasMore ? encodeMemoryListCursor(last.key) : null,
+        nextCursor: hasMore ? encodeMemoryListCursor(storeId, last.key) : null,
       };
     },
   };

@@ -13,12 +13,14 @@ listing, and a conformance suite that every adapter must pass.
 
 ## Install
 
+Not on npm until the first supported release. Until then, depend only from this
+workspace or a packed tarball (`npm pack` in `packages/storage-blobs`).
+
+Once published:
+
 ```sh
 npm install @pegma/storage-blobs
 ```
-
-Not on npm until the first supported release. Until then, depend only from this
-workspace or a packed tarball.
 
 ## Server-side composition
 
@@ -38,7 +40,7 @@ const key = "support-desk/attachments/01JEXAMPLE";
 const put = await blobs.put(key, requestBodyStream, {
   contentType: "application/pdf",
   ifNoneMatch: "*", // create-only
-  userMetadata: { ticketId: "t_123" },
+  userMetadata: { ticket_id: "t_123" },
 });
 
 if (!put.ok) {

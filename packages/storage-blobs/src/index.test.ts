@@ -48,6 +48,22 @@ describe("memory store isolation", () => {
     await first.put("only-in-first", new TextEncoder().encode("secret"));
     expect(await second.get("only-in-first")).toBeNull();
   });
+
+  it("rejects a list cursor issued by a different memory store", async () => {
+    const first = createMemoryBlobStore();
+    const second = createMemoryBlobStore();
+    await first.put("page/a", new TextEncoder().encode("a"));
+    await first.put("page/b", new TextEncoder().encode("b"));
+    const page = await first.list({ prefix: "page/", limit: 1 });
+    expect(page.nextCursor).not.toBeNull();
+    await expect(
+      second.list({
+        prefix: "page/",
+        limit: 1,
+        cursor: page.nextCursor!,
+      }),
+    ).rejects.toBeInstanceOf(BlobValidationError);
+  });
 });
 
 describe("memory etag lifecycle", () => {
