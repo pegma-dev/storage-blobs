@@ -496,6 +496,26 @@ export const conformanceCases: readonly ConformanceCase[] = [
   }),
 
   testCase(
+    "rejects content-type and metadata values with surrounding whitespace",
+    async (store) => {
+      await assert.rejects(
+        () =>
+          store.put("meta/ws-ctype", textBytes("x"), {
+            contentType: " application/pdf ",
+          }),
+        (error: unknown) => error instanceof BlobValidationError,
+      );
+      await assert.rejects(
+        () =>
+          store.put("meta/ws-meta", textBytes("x"), {
+            userMetadata: { label: " draft " },
+          }),
+        (error: unknown) => error instanceof BlobValidationError,
+      );
+    },
+  ),
+
+  testCase(
     "rejects user metadata over the aggregate byte budget",
     async (store) => {
       // 8 entries of 256-byte values exceed the 2 KiB S3 budget.

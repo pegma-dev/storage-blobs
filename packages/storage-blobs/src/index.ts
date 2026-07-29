@@ -336,6 +336,19 @@ function isPrintableAscii(value: string): boolean {
 }
 
 /**
+ * Header-backed fields (content-type, metadata values) must not have leading
+ * or trailing whitespace: HTTP header parsers strip it and adapters would
+ * either reject or return a different value than memory.
+ */
+function assertNoSurroundingWhitespace(value: string, label: string): void {
+  if (value !== value.trim()) {
+    throw new BlobValidationError(
+      `${label} must not have leading or trailing whitespace.`,
+    );
+  }
+}
+
+/**
  * Copies bytes without calling the input's `slice` method. Node `Buffer.slice`
  * returns a shared view; callers must not be able to mutate stored objects.
  */
@@ -431,6 +444,10 @@ function normalizeUserMetadata(
         `User metadata value for ${JSON.stringify(rawKey)} must be printable ASCII.`,
       );
     }
+    assertNoSurroundingWhitespace(
+      value,
+      `User metadata value for ${JSON.stringify(rawKey)}`,
+    );
     const valueBytes = utf8ByteLength(value);
     if (valueBytes > MAX_USER_METADATA_VALUE_BYTES) {
       throw new BlobValidationError(
