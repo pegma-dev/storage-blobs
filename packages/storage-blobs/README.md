@@ -87,9 +87,13 @@ do {
 
 Listing is not a snapshot. Always delete with the etag you observed.
 
-## Conformance
+## Conformance (v1 specification)
 
-Every adapter must pass the exported suite against a real empty backend:
+The exported suite **is** the v1 contract. A behaviour not asserted there is
+not something a component may rely on. New `BlobStore` methods require suite
+cases in the same change. See [ADAPTER_AUTHORING.md](../../docs/ADAPTER_AUTHORING.md).
+
+Every adapter must pass the suite against a real empty backend:
 
 ```ts
 import { describe, it } from "vitest";

@@ -619,6 +619,132 @@ export const conformanceCases: readonly ConformanceCase[] = [
       assertBytesEqual(await readAll(got.body), new Uint8Array([1, 2, 3]));
     },
   ),
+
+  // --- Phase 2 adversarial edges (suite freeze) ---
+
+  testCase(
+    "put from many small stream chunks preserves exact bytes",
+    async (store) => {
+      const chunkCount = 200;
+      const chunks = Array.from(
+        { length: chunkCount },
+        (_, index) => new Uint8Array([index & 0xff]),
+      );
+      const expected = new Uint8Array(chunkCount);
+      for (let index = 0; index < chunkCount; index += 1) {
+        expected[index] = index & 0xff;
+      }
+      const put = await store.put("streams/many", multiChunkStream(chunks));
+      assert.equal(put.ok, true);
+      if (!put.ok) {
+        return;
+      }
+      assert.equal(put.size, chunkCount);
+      const got = await store.get("streams/many");
+      assert.ok(got);
+      assertBytesEqual(await readAll(got.body), expected);
+    },
+  ),
+
+  testCase(
+    "put from a large multi-chunk stream preserves exact bytes",
+    async (store) => {
+      // 64 × 16 KiB = 1 MiB — large enough to force multi-chunk buffering /
+      // multipart paths in adapters while staying under default test ceilings.
+      const chunkSize = 16 * 1_024;
+      const chunkCount = 64;
+      const chunks = Array.from({ length: chunkCount }, (_, index) => {
+        const chunk = new Uint8Array(chunkSize);
+        chunk.fill(index & 0xff);
+        return chunk;
+      });
+      const expected = new Uint8Array(chunkSize * chunkCount);
+      for (let index = 0; index < chunkCount; index += 1) {
+        expected.fill(index & 0xff, index * chunkSize, (index + 1) * chunkSize);
+      }
+      const put = await store.put("streams/large", multiChunkStream(chunks), {
+        contentType: "application/octet-stream",
+      });
+      assert.equal(put.ok, true);
+      if (!put.ok) {
+        return;
+      }
+      assert.equal(put.size, expected.byteLength);
+      const got = await store.get("streams/large");
+      assert.ok(got);
+      assertBytesEqual(await readAll(got.body), expected);
+    },
+  ),
+
+  testCase(
+    "get body is a snapshot independent of a later replace",
+    async (store) => {
+      await store.put("snap/obj", textBytes("before"));
+      const first = await store.get("snap/obj");
+      assert.ok(first);
+      await store.put("snap/obj", textBytes("after-replace"));
+      assertBytesEqual(await readAll(first.body), textBytes("before"));
+      const second = await store.get("snap/obj");
+      assert.ok(second);
+      assertBytesEqual(await readAll(second.body), textBytes("after-replace"));
+    },
+  ),
+
+  testCase("put replace replaces user metadata whole", async (store) => {
+    await store.put("meta/replace", textBytes("a"), {
+      userMetadata: { keep: "no", only: "first" },
+    });
+    await store.put("meta/replace", textBytes("b"), {
+      userMetadata: { only: "second" },
+    });
+    const head = await store.head("meta/replace");
+    assert.ok(head);
+    assert.deepEqual(head.userMetadata, { only: "second" });
+  }),
+
+  testCase("rejects ifNoneMatch values other than *", async (store) => {
+    await assert.rejects(
+      () =>
+        store.put("cond/bad-none", textBytes("x"), {
+          ifNoneMatch: "etag-value" as "*",
+        }),
+      (error: unknown) => error instanceof BlobValidationError,
+    );
+  }),
+
+  testCase("rejects an empty ifMatch etag", async (store) => {
+    await assert.rejects(
+      () => store.put("cond/bad-match", textBytes("x"), { ifMatch: "" }),
+      (error: unknown) => error instanceof BlobValidationError,
+    );
+    await assert.rejects(
+      () => store.delete("cond/bad-match", { ifMatch: "" }),
+      (error: unknown) => error instanceof BlobValidationError,
+    );
+  }),
+
+  testCase("accepts a key at the maximum UTF-8 byte length", async (store) => {
+    const key = "k".repeat(MAX_BLOB_KEY_BYTES);
+    const put = await store.put(key, textBytes("edge"));
+    assert.equal(put.ok, true);
+    const head = await store.head(key);
+    assert.ok(head);
+    assert.equal(head.key, key);
+  }),
+
+  testCase("list is empty for a free prefix", async (store) => {
+    await store.put("kept/a", textBytes("a"));
+    const page = await store.list({ prefix: "absent/", limit: 10 });
+    assert.deepEqual(page.objects, []);
+    assert.equal(page.nextCursor, null);
+  }),
+
+  testCase("head after delete returns null", async (store) => {
+    await store.put("gone/obj", textBytes("x"));
+    assert.deepEqual(await store.delete("gone/obj"), { ok: true });
+    assert.equal(await store.head("gone/obj"), null);
+    assert.equal(await store.get("gone/obj"), null);
+  }),
 ];
 
 /**
