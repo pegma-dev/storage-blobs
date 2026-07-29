@@ -42,41 +42,72 @@ import {
   dualStoreConformanceCases,
   sizeLimitConformanceCases,
 } from "@pegma/storage-blobs/conformance";
-import { createMyBlobStore } from "./index.js";
+import { createMyBlobStore, type BlobStore } from "./index.js";
 
-function createStore(): BlobStore {
-  // Fresh client handle to ONE initially empty container/bucket for this case.
-  return createMyBlobStore({ /* real backend binding */ });
+// Provision a fresh empty container/bucket, return a factory of client handles
+// that all talk to that same empty backend for the duration of one case.
+async function openEmptyBackend(): Promise<{
+  createStore: () => BlobStore;
+  close: () => Promise<void>;
+}> {
+  const bucket = await provisionEmptyBucket(); // real service
+  return {
+    createStore: () => createMyBlobStore({ bucket }),
+    close: () => destroyBucket(bucket),
+  };
 }
 
 describe("my adapter", () => {
   for (const testCase of conformanceCases) {
-    it(testCase.name, () => testCase.run(() => createStore()));
+    it(testCase.name, async () => {
+      const backend = await openEmptyBackend();
+      try {
+        // Repeated createStore() calls share this case's empty backend.
+        await testCase.run(() => backend.createStore());
+      } finally {
+        await backend.close();
+      }
+    });
   }
 
   for (const testCase of sizeLimitConformanceCases) {
-    it(testCase.name, () =>
-      testCase.run((limitBytes) =>
-        createMyBlobStore({ maxObjectBytes: limitBytes /* + backend */ }),
-      ),
-    );
+    it(testCase.name, async () => {
+      await testCase.run(async (limitBytes) => {
+        // Each limitBytes invocation may use its own empty backend.
+        return createMyBlobStore({
+          maxObjectBytes: limitBytes,
+          bucket: await provisionEmptyBucket(),
+        });
+      });
+    });
   }
 
   for (const testCase of concurrentConformanceCases) {
-    // Each createStore() call must share the same physical empty backend.
-    const shared = /* one empty bucket */;
-    it(testCase.name, () =>
-      testCase.run(() => createMyBlobStore({ bucket: shared })),
-    );
+    it(testCase.name, async () => {
+      const backend = await openEmptyBackend();
+      try {
+        // Every createStore() must share ONE empty backend for the race.
+        await testCase.run(() => backend.createStore());
+      } finally {
+        await backend.close();
+      }
+    });
   }
 
   for (const testCase of dualStoreConformanceCases) {
-    it(testCase.name, () =>
-      testCase.run(
-        () => createMyBlobStore({ bucket: emptyA }),
-        () => createMyBlobStore({ bucket: emptyB }),
-      ),
-    );
+    it(testCase.name, async () => {
+      const a = await openEmptyBackend();
+      const b = await openEmptyBackend();
+      try {
+        await testCase.run(
+          () => a.createStore(),
+          () => b.createStore(),
+        );
+      } finally {
+        await a.close();
+        await b.close();
+      }
+    });
   }
 });
 ```

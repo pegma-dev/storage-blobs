@@ -647,6 +647,36 @@ export const conformanceCases: readonly ConformanceCase[] = [
   ),
 
   testCase(
+    "put from a large multi-chunk stream preserves exact bytes",
+    async (store) => {
+      // 64 × 16 KiB = 1 MiB — large enough to force multi-chunk buffering /
+      // multipart paths in adapters while staying under default test ceilings.
+      const chunkSize = 16 * 1_024;
+      const chunkCount = 64;
+      const chunks = Array.from({ length: chunkCount }, (_, index) => {
+        const chunk = new Uint8Array(chunkSize);
+        chunk.fill(index & 0xff);
+        return chunk;
+      });
+      const expected = new Uint8Array(chunkSize * chunkCount);
+      for (let index = 0; index < chunkCount; index += 1) {
+        expected.fill(index & 0xff, index * chunkSize, (index + 1) * chunkSize);
+      }
+      const put = await store.put("streams/large", multiChunkStream(chunks), {
+        contentType: "application/octet-stream",
+      });
+      assert.equal(put.ok, true);
+      if (!put.ok) {
+        return;
+      }
+      assert.equal(put.size, expected.byteLength);
+      const got = await store.get("streams/large");
+      assert.ok(got);
+      assertBytesEqual(await readAll(got.body), expected);
+    },
+  ),
+
+  testCase(
     "get body is a snapshot independent of a later replace",
     async (store) => {
       await store.put("snap/obj", textBytes("before"));
