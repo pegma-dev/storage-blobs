@@ -8,18 +8,13 @@ components: opaque keys, streaming put/get, conditional writes, bounded prefix
 listing, and a conformance suite that every adapter must pass.
 
 > [!IMPORTANT]
-> This package is in early `0.x` development. It is not published and its
-> public API is not stable. See [PROJECT_PLAN.md](../../docs/PROJECT_PLAN.md).
+> Early `0.x` (`0.1.0` on npm). Pin exact versions; the public API is not frozen.
+> See [PROJECT_PLAN.md](../../docs/PROJECT_PLAN.md).
 
 ## Install
 
-Not on npm until the first supported release. Until then, depend only from this
-workspace or a packed tarball (`npm pack` in `packages/storage-blobs`).
-
-Once published:
-
 ```sh
-npm install @pegma/storage-blobs
+npm install @pegma/storage-blobs@0.1.0
 ```
 
 ## Server-side composition

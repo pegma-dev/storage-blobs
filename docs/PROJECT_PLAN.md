@@ -2,9 +2,9 @@
 
 ## Status
 
-**Stage:** Phase 6 in progress. Port and three cloud adapters are complete;
-package versions are set to `0.1.0` for the first trusted-publisher release.
-Public installability awaits the signed `v0.1.0` release.
+**Stage:** Phase 6 complete. `@pegma/storage-blobs@0.1.0` and the Azure Blob,
+Cloudflare R2, and S3 adapters are on npm with trusted-publisher provenance
+from the signed `v0.1.0` release.
 
 **Package (first release):** `@pegma/storage-blobs@0.1.0` (with adapters
 `@pegma/storage-azure-blob`, `@pegma/storage-cloudflare-r2`,
@@ -220,13 +220,12 @@ further port methods require suite additions in the same change.
 **Exit criterion:** suite green against LocalStack, MinIO, or real S3 test
 bucket as chosen in the adapter PR.
 
-### Phase 6 — first supported publish (in progress)
+### Phase 6 — first supported publish ✓
 
-- Package versions aligned at `0.1.0` (this change).
+- Package versions aligned at `0.1.0`.
 - Trusted publisher configured for each package.
-- First advertised release `0.1.0` (or repository-wide aligned set) with
-  provenance.
-- Org profile and pegma.dev roadmap entry when appropriate.
+- First advertised release `0.1.0` with provenance (`v0.1.0`).
+- Org profile and pegma.dev roadmap entry updated with the published packages.
 
 **Exit criterion:** public exact versions installable; release runbook followed
 once end-to-end.

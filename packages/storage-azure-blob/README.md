@@ -6,7 +6,8 @@
 Azure Blob Storage adapter for [`@pegma/storage-blobs`](../storage-blobs).
 
 > [!IMPORTANT]
-> Early `0.x`. Not published yet. Verified against Azurite in this monorepo's CI.
+> Early `0.x` (`0.1.0` on npm). Pin exact versions. Verified against Azurite in
+> this monorepo's CI.
 
 ## Usage
 
