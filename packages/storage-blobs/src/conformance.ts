@@ -438,6 +438,19 @@ export const conformanceCases: readonly ConformanceCase[] = [
     );
   }),
 
+  testCase("rejects the exact keys . and ..", async (store) => {
+    for (const key of [".", ".."]) {
+      await assert.rejects(
+        () => store.put(key, textBytes("x")),
+        (error: unknown) => error instanceof BlobValidationError,
+      );
+      await assert.rejects(
+        () => store.get(key),
+        (error: unknown) => error instanceof BlobValidationError,
+      );
+    }
+  }),
+
   testCase("rejects a key containing a control character", async (store) => {
     const key = `bad${String.fromCharCode(0)}key`;
     await assert.rejects(
