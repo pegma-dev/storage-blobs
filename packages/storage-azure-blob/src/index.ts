@@ -265,8 +265,17 @@ export function createAzureBlobStore(
   const container = options.containerClient;
   const createIfMissing = options.createContainerIfMissing !== false;
   const containerName = container.containerName;
-  // Account/endpoint + container so cursors cannot cross stores that share a name.
-  const backendId = `${container.accountName ?? "account"}|${container.url}|${containerName}`;
+  // Credential-free identity so SAS query strings never enter list cursors.
+  let endpoint = container.url;
+  try {
+    const parsed = new URL(container.url);
+    parsed.search = "";
+    parsed.hash = "";
+    endpoint = parsed.toString();
+  } catch {
+    // Fall back to the raw URL if it is not absolute.
+  }
+  const backendId = `${container.accountName ?? "account"}|${endpoint}|${containerName}`;
   let ensureContainer: Promise<void> | undefined;
 
   async function ready(): Promise<void> {

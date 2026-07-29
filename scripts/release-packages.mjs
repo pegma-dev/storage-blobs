@@ -224,6 +224,21 @@ export async function validateRepository(options = {}) {
   }
   const sharedVersion = packages[0].manifest.version;
 
+  for (const entry of packages) {
+    const dependencies = {
+      ...entry.manifest.dependencies,
+      ...entry.manifest.peerDependencies,
+    };
+    for (const definition of RELEASE_PACKAGES) {
+      if (dependencies?.[definition.name] === undefined) continue;
+      if (dependencies[definition.name] !== sharedVersion) {
+        fail(
+          `${entry.manifest.name} must depend on ${definition.name}@${sharedVersion} exactly`,
+        );
+      }
+    }
+  }
+
   const publicWorkspaces = [];
   for (const entry of await readdir(join(root, "packages"), {
     withFileTypes: true,
@@ -315,7 +330,7 @@ function verifyPackedFiles(manifest, files) {
   }
 }
 
-async function smokeTestTarball(tarball, manifest) {
+async function smokeTestTarball(tarball, manifest, siblingTarballs = []) {
   const directory = await mkdtemp(
     join(tmpdir(), "storage-blobs-release-smoke-"),
   );
@@ -324,6 +339,9 @@ async function smokeTestTarball(tarball, manifest) {
       join(directory, "package.json"),
       '{"name":"storage-blobs-release-smoke","private":true,"type":"module"}\n',
     );
+    // Install sibling workspace tarballs first so adapters can resolve exact
+    // unpublished @pegma/* versions during the first multi-package release.
+    const installTargets = [...siblingTarballs, tarball];
     runNpm(
       [
         "install",
@@ -331,7 +349,7 @@ async function smokeTestTarball(tarball, manifest) {
         "--no-audit",
         "--no-fund",
         "--package-lock=false",
-        tarball,
+        ...installTargets,
       ],
       { cwd: directory, capture: true },
     );
