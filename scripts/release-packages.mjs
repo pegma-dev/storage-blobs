@@ -385,7 +385,9 @@ export async function prepareRelease(options = {}) {
 
   runNpm(["run", "build"], { cwd: root });
 
-  const preparedPackages = [];
+  // Pack every package before smoke tests so adapters can install sibling
+  // tarballs instead of fetching unpublished versions from the registry.
+  const packedEntries = [];
   for (const entry of packages) {
     const result = runNpm(
       ["pack", entry.packageDirectory, "--json", "--pack-destination", output],
@@ -411,7 +413,15 @@ export async function prepareRelease(options = {}) {
         `tarball hashes do not match npm pack metadata for ${entry.manifest.name}`,
       );
     }
-    await smokeTestTarball(tarballPath, entry.manifest);
+    packedEntries.push({ entry, packed, tarballPath, hashes });
+  }
+
+  const preparedPackages = [];
+  for (const { entry, packed, tarballPath, hashes } of packedEntries) {
+    const siblings = packedEntries
+      .filter((candidate) => candidate.tarballPath !== tarballPath)
+      .map((candidate) => candidate.tarballPath);
+    await smokeTestTarball(tarballPath, entry.manifest, siblings);
     preparedPackages.push({
       name: entry.manifest.name,
       version: entry.manifest.version,
