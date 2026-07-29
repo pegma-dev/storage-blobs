@@ -84,9 +84,10 @@ OIDC authority. See `docs/RELEASING.md`.
 
 ## Where things stand
 
-Port, memory store, and conformance suite are implemented in
+Port, memory store, and frozen conformance suite are implemented in
 `@pegma/storage-blobs`. Cloud adapters and the first publish are still open.
-Track work in `docs/PROJECT_PLAN.md`.
+Track work in `docs/PROJECT_PLAN.md`. See `docs/ADAPTER_AUTHORING.md` before
+adding a backend.
 
 Siblings: [storage-core](https://github.com/pegma-dev/storage-core),
 [spine](https://github.com/pegma-dev/spine),

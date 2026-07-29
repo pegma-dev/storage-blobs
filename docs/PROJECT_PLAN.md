@@ -2,9 +2,8 @@
 
 ## Status
 
-**Stage:** Phase 1 landed on the port track. `BlobStore`, in-memory reference
-store, and conformance suite exist; cloud adapters and npm publication are
-still open.
+**Stage:** Phase 2 complete on the port track. The conformance suite is the
+frozen v1 specification; cloud adapters and npm publication are still open.
 
 **Package (planned first release):** `@pegma/storage-blobs@0.1.0`
 
@@ -184,7 +183,7 @@ All publishable packages live in this monorepo (same layout as storage-core).
 **Exit criterion:** memory store passes the full suite; public types documented;
 no cloud SDK in `@pegma/storage-blobs`.
 
-### Phase 2 — freeze the contract
+### Phase 2 — freeze the contract (done)
 
 - Adversarial and edge cases in conformance (empty body, large multi-chunk
   streams, foreign cursors, illegal keys, concurrent create-only races).
