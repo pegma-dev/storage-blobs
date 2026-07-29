@@ -1,0 +1,40 @@
+{
+  "name": "@pegma/storage-azure-blob",
+  "version": "0.0.0",
+  "description": "Azure Blob Storage adapter for @pegma/storage-blobs.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map",
+    "dist/**/*.js",
+    "dist/**/*.js.map"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pegma-dev/storage-blobs.git",
+    "directory": "packages/storage-azure-blob"
+  },
+  "dependencies": {
+    "@azure/storage-blob": "^12.29.1",
+    "@pegma/storage-blobs": "0.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "prepack": "npm run build"
+  }
+}

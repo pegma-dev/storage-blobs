@@ -2,8 +2,9 @@
 
 ## Status
 
-**Stage:** Phase 2 complete on the port track. The conformance suite is the
-frozen v1 specification; cloud adapters and npm publication are still open.
+**Stage:** Phase 3 complete on the Azure track. Port, frozen suite, and Azure
+Blob adapter (Azurite-proven) land; R2/S3 adapters and npm publication are
+still open.
 
 **Package (planned first release):** `@pegma/storage-blobs@0.1.0`
 
@@ -193,7 +194,7 @@ no cloud SDK in `@pegma/storage-blobs`.
 **Exit criterion:** suite is considered the specification for v1 adapters;
 further port methods require suite additions in the same change.
 
-### Phase 3 — Azure Blob adapter
+### Phase 3 — Azure Blob adapter (done)
 
 - `@pegma/storage-azure-blob` against Azurite (and optionally a real account in
   maintained CI secrets later).

@@ -13,15 +13,20 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const PACKAGE = {
-  directory: "storage-blobs",
-  name: "@pegma/storage-blobs",
-};
 const REPOSITORY_URL = "git+https://github.com/pegma-dev/storage-blobs.git";
 const REVIEWED_NPM_VERSION = "11.18.0";
 const STABLE_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 
-export const RELEASE_PACKAGES = [PACKAGE];
+export const RELEASE_PACKAGES = [
+  {
+    directory: "storage-blobs",
+    name: "@pegma/storage-blobs",
+  },
+  {
+    directory: "storage-azure-blob",
+    name: "@pegma/storage-azure-blob",
+  },
+];
 
 function fail(message) {
   throw new Error(message);
@@ -146,22 +151,13 @@ export function validateReleaseTag(options = {}) {
   return { headCommit, releaseTag };
 }
 
-export async function validateRepository(options = {}) {
-  const root = resolve(options.root ?? defaultRoot());
-  const rootManifest = await readJson(join(root, "package.json"));
-  const packageDirectory = join(root, "packages", PACKAGE.directory);
+async function validateOnePackage(root, definition, lockfile) {
+  const packageDirectory = join(root, "packages", definition.directory);
   const manifest = await readJson(join(packageDirectory, "package.json"));
-  const lockfile = await readJson(join(root, "package-lock.json"));
-  const lockEntry = lockfile.packages?.[`packages/${PACKAGE.directory}`];
+  const lockEntry = lockfile.packages?.[`packages/${definition.directory}`];
 
   if (
-    rootManifest.private !== true ||
-    rootManifest.packageManager !== `npm@${REVIEWED_NPM_VERSION}`
-  ) {
-    fail(`the private root must pin npm@${REVIEWED_NPM_VERSION}`);
-  }
-  if (
-    manifest.name !== PACKAGE.name ||
+    manifest.name !== definition.name ||
     !STABLE_SEMVER.test(manifest.version) ||
     manifest.private === true ||
     manifest.license !== "MIT" ||
@@ -170,9 +166,9 @@ export async function validateRepository(options = {}) {
     manifest.engines?.node !== ">=22" ||
     manifest.repository?.type !== "git" ||
     manifest.repository?.url !== REPOSITORY_URL ||
-    manifest.repository?.directory !== `packages/${PACKAGE.directory}`
+    manifest.repository?.directory !== `packages/${definition.directory}`
   ) {
-    fail(`${PACKAGE.name} has invalid public package metadata`);
+    fail(`${definition.name} has invalid public package metadata`);
   }
   if (
     !Array.isArray(manifest.files) ||
@@ -181,7 +177,7 @@ export async function validateRepository(options = {}) {
     typeof manifest.scripts?.prepack !== "string" ||
     !manifest.scripts.prepack.includes("build")
   ) {
-    fail(`${PACKAGE.name} has an unsafe package allowlist or prepack`);
+    fail(`${definition.name} has an unsafe package allowlist or prepack`);
   }
   const targets = exportTargets(manifest.exports);
   if (
@@ -193,12 +189,54 @@ export async function validateRepository(options = {}) {
         target.includes(".."),
     )
   ) {
-    fail(`${PACKAGE.name} exports must point into dist`);
+    fail(`${definition.name} exports must point into dist`);
   }
   await stat(join(packageDirectory, "README.md"));
   await stat(join(packageDirectory, "LICENSE"));
   if (lockEntry?.version !== manifest.version) {
-    fail(`${PACKAGE.name} version is not synchronized with package-lock.json`);
+    fail(
+      `${definition.name} version is not synchronized with package-lock.json`,
+    );
+  }
+  return { definition, packageDirectory, manifest };
+}
+
+export async function validateRepository(options = {}) {
+  const root = resolve(options.root ?? defaultRoot());
+  const rootManifest = await readJson(join(root, "package.json"));
+  const lockfile = await readJson(join(root, "package-lock.json"));
+
+  if (
+    rootManifest.private !== true ||
+    rootManifest.packageManager !== `npm@${REVIEWED_NPM_VERSION}`
+  ) {
+    fail(`the private root must pin npm@${REVIEWED_NPM_VERSION}`);
+  }
+
+  const packages = [];
+  for (const definition of RELEASE_PACKAGES) {
+    packages.push(await validateOnePackage(root, definition, lockfile));
+  }
+
+  const versions = new Set(packages.map(({ manifest }) => manifest.version));
+  if (versions.size !== 1) {
+    fail("release packages must share one exact version");
+  }
+  const sharedVersion = packages[0].manifest.version;
+
+  for (const entry of packages) {
+    const dependencies = {
+      ...entry.manifest.dependencies,
+      ...entry.manifest.peerDependencies,
+    };
+    for (const definition of RELEASE_PACKAGES) {
+      if (dependencies?.[definition.name] === undefined) continue;
+      if (dependencies[definition.name] !== sharedVersion) {
+        fail(
+          `${entry.manifest.name} must depend on ${definition.name}@${sharedVersion} exactly`,
+        );
+      }
+    }
   }
 
   const publicWorkspaces = [];
@@ -215,7 +253,9 @@ export async function validateRepository(options = {}) {
       if (error?.code !== "ENOENT") throw error;
     }
   }
-  if (publicWorkspaces.length !== 1 || publicWorkspaces[0] !== PACKAGE.name) {
+  publicWorkspaces.sort();
+  const expected = RELEASE_PACKAGES.map(({ name }) => name).sort();
+  if (JSON.stringify(publicWorkspaces) !== JSON.stringify(expected)) {
     fail("public workspace inventory does not match the reviewed release list");
   }
 
@@ -243,8 +283,8 @@ export async function validateRepository(options = {}) {
   }
 
   const releaseTag = options.releaseTag ?? process.env.RELEASE_TAG;
-  if (releaseTag !== undefined && releaseTag !== `v${manifest.version}`) {
-    fail(`release tag must be v${manifest.version}`);
+  if (releaseTag !== undefined && releaseTag !== `v${sharedVersion}`) {
+    fail(`release tag must be v${sharedVersion}`);
   }
   const prerelease =
     options.releasePrerelease ?? process.env.RELEASE_PRERELEASE ?? false;
@@ -258,7 +298,15 @@ export async function validateRepository(options = {}) {
       expectedReleaseCommit: options.expectedReleaseCommit,
     });
   }
-  return { root, manifest, packageDirectory, releaseTag };
+  // Back-compat fields used by prepareRelease for the primary package.
+  const primary = packages[0];
+  return {
+    root,
+    packages,
+    manifest: primary.manifest,
+    packageDirectory: primary.packageDirectory,
+    releaseTag,
+  };
 }
 
 function verifyPackedFiles(manifest, files) {
@@ -282,7 +330,7 @@ function verifyPackedFiles(manifest, files) {
   }
 }
 
-async function smokeTestTarball(tarball, manifest) {
+async function smokeTestTarball(tarball, manifest, siblingTarballs = []) {
   const directory = await mkdtemp(
     join(tmpdir(), "storage-blobs-release-smoke-"),
   );
@@ -291,6 +339,9 @@ async function smokeTestTarball(tarball, manifest) {
       join(directory, "package.json"),
       '{"name":"storage-blobs-release-smoke","private":true,"type":"module"}\n',
     );
+    // Install sibling workspace tarballs first so adapters can resolve exact
+    // unpublished @pegma/* versions during the first multi-package release.
+    const installTargets = [...siblingTarballs, tarball];
     runNpm(
       [
         "install",
@@ -298,7 +349,7 @@ async function smokeTestTarball(tarball, manifest) {
         "--no-audit",
         "--no-fund",
         "--package-lock=false",
-        tarball,
+        ...installTargets,
       ],
       { cwd: directory, capture: true },
     );
@@ -321,8 +372,7 @@ async function smokeTestTarball(tarball, manifest) {
 }
 
 export async function prepareRelease(options = {}) {
-  const { root, manifest, packageDirectory, releaseTag } =
-    await validateRepository(options);
+  const { root, packages, releaseTag } = await validateRepository(options);
   const gitCommit = run(gitCommand(), ["rev-parse", "HEAD"], {
     cwd: root,
     capture: true,
@@ -334,44 +384,61 @@ export async function prepareRelease(options = {}) {
   }
 
   runNpm(["run", "build"], { cwd: root });
-  const result = runNpm(
-    ["pack", packageDirectory, "--json", "--pack-destination", output],
-    { cwd: root, capture: true },
-  );
-  const [packed] = JSON.parse(result.stdout);
-  if (
-    packed?.name !== manifest.name ||
-    packed?.version !== manifest.version ||
-    typeof packed.filename !== "string" ||
-    !Array.isArray(packed.files)
-  ) {
-    fail("npm pack returned invalid metadata");
-  }
-  verifyPackedFiles(manifest, packed.files);
-  const tarballPath = join(output, basename(packed.filename));
-  const hashes = hashTarball(await readFile(tarballPath));
-  if (
-    !safeEqual(hashes.integrity, packed.integrity) ||
-    !safeEqual(hashes.shasum, packed.shasum)
-  ) {
-    fail("tarball hashes do not match npm pack metadata");
-  }
-  await smokeTestTarball(tarballPath, manifest);
 
-  const prepared = {
-    schemaVersion: 1,
-    gitCommit,
-    releaseTag: releaseTag ?? null,
-    package: {
-      name: manifest.name,
-      version: manifest.version,
+  // Pack every package before smoke tests so adapters can install sibling
+  // tarballs instead of fetching unpublished versions from the registry.
+  const packedEntries = [];
+  for (const entry of packages) {
+    const result = runNpm(
+      ["pack", entry.packageDirectory, "--json", "--pack-destination", output],
+      { cwd: root, capture: true },
+    );
+    const [packed] = JSON.parse(result.stdout);
+    if (
+      packed?.name !== entry.manifest.name ||
+      packed?.version !== entry.manifest.version ||
+      typeof packed.filename !== "string" ||
+      !Array.isArray(packed.files)
+    ) {
+      fail(`npm pack returned invalid metadata for ${entry.manifest.name}`);
+    }
+    verifyPackedFiles(entry.manifest, packed.files);
+    const tarballPath = join(output, basename(packed.filename));
+    const hashes = hashTarball(await readFile(tarballPath));
+    if (
+      !safeEqual(hashes.integrity, packed.integrity) ||
+      !safeEqual(hashes.shasum, packed.shasum)
+    ) {
+      fail(
+        `tarball hashes do not match npm pack metadata for ${entry.manifest.name}`,
+      );
+    }
+    packedEntries.push({ entry, packed, tarballPath, hashes });
+  }
+
+  const preparedPackages = [];
+  for (const { entry, packed, tarballPath, hashes } of packedEntries) {
+    const siblings = packedEntries
+      .filter((candidate) => candidate.tarballPath !== tarballPath)
+      .map((candidate) => candidate.tarballPath);
+    await smokeTestTarball(tarballPath, entry.manifest, siblings);
+    preparedPackages.push({
+      name: entry.manifest.name,
+      version: entry.manifest.version,
       tarball: basename(tarballPath),
       integrity: hashes.integrity,
       shasum: hashes.shasum,
       files: packed.files
         .map(({ path, size }) => ({ path, size }))
         .sort((left, right) => left.path.localeCompare(right.path)),
-    },
+    });
+  }
+
+  const prepared = {
+    schemaVersion: 2,
+    gitCommit,
+    releaseTag: releaseTag ?? null,
+    packages: preparedPackages,
   };
   const manifestPath = join(output, "package-manifest.json");
   await writeFile(manifestPath, `${JSON.stringify(prepared, null, 2)}\n`);
@@ -433,16 +500,12 @@ function confirmRegistryIntegrity(record) {
 
 async function verifyPreparedManifest(path) {
   const prepared = await readJson(path);
-  const record = prepared.package;
+  const records = prepared.packages;
   if (
-    prepared.schemaVersion !== 1 ||
+    prepared.schemaVersion !== 2 ||
     !/^[0-9a-f]{40,64}$/u.test(prepared.gitCommit) ||
-    prepared.releaseTag !== `v${record?.version}` ||
-    record?.name !== PACKAGE.name ||
-    !STABLE_SEMVER.test(record.version) ||
-    typeof record.integrity !== "string" ||
-    typeof record.shasum !== "string" ||
-    !Array.isArray(record.files)
+    !Array.isArray(records) ||
+    records.length !== RELEASE_PACKAGES.length
   ) {
     fail("prepared package manifest is invalid");
   }
@@ -453,21 +516,37 @@ async function verifyPreparedManifest(path) {
   if (!safeEqual(currentCommit, prepared.gitCommit)) {
     fail("prepared package manifest commit does not match the checkout");
   }
-  const expectedTarball = `${PACKAGE.name
-    .slice(1)
-    .replace("/", "-")}-${record.version}.tgz`;
-  if (record.tarball !== expectedTarball)
-    fail("prepared tarball name is invalid");
-  const tarball = resolve(dirname(path), record.tarball);
-  if (dirname(tarball) !== resolve(dirname(path))) {
-    fail("prepared tarball must be beside the package manifest");
-  }
-  const hashes = hashTarball(await readFile(tarball));
-  if (
-    !safeEqual(hashes.integrity, record.integrity) ||
-    !safeEqual(hashes.shasum, record.shasum)
-  ) {
-    fail("prepared tarball has changed");
+
+  for (let index = 0; index < RELEASE_PACKAGES.length; index += 1) {
+    const definition = RELEASE_PACKAGES[index];
+    const record = records[index];
+    if (
+      prepared.releaseTag !== `v${record?.version}` ||
+      record?.name !== definition.name ||
+      !STABLE_SEMVER.test(record.version) ||
+      typeof record.integrity !== "string" ||
+      typeof record.shasum !== "string" ||
+      !Array.isArray(record.files)
+    ) {
+      fail(`prepared package record is invalid for ${definition.name}`);
+    }
+    const expectedTarball = `${definition.name
+      .slice(1)
+      .replace("/", "-")}-${record.version}.tgz`;
+    if (record.tarball !== expectedTarball) {
+      fail(`prepared tarball name is invalid for ${definition.name}`);
+    }
+    const tarball = resolve(dirname(path), record.tarball);
+    if (dirname(tarball) !== resolve(dirname(path))) {
+      fail("prepared tarball must be beside the package manifest");
+    }
+    const hashes = hashTarball(await readFile(tarball));
+    if (
+      !safeEqual(hashes.integrity, record.integrity) ||
+      !safeEqual(hashes.shasum, record.shasum)
+    ) {
+      fail(`prepared tarball has changed for ${definition.name}`);
+    }
   }
   return prepared;
 }
@@ -496,28 +575,29 @@ export async function publishPreparedRelease(options = {}) {
     fail("prepared package manifest must match the release event commit");
   }
 
-  const record = prepared.package;
-  const decision = decidePublication(
-    record.integrity,
-    queryRegistryIntegrity(record.name, record.version),
-  );
-  if (decision === "skip") {
-    process.stdout.write(
-      `Verified existing ${record.name}@${record.version}; skipping.\n`,
+  for (const record of prepared.packages) {
+    const decision = decidePublication(
+      record.integrity,
+      queryRegistryIntegrity(record.name, record.version),
     );
-    return;
+    if (decision === "skip") {
+      process.stdout.write(
+        `Verified existing ${record.name}@${record.version}; skipping.\n`,
+      );
+      continue;
+    }
+    runNpm(
+      [
+        "publish",
+        resolve(dirname(path), record.tarball),
+        "--access",
+        "public",
+        "--provenance",
+      ],
+      { cwd: dirname(path) },
+    );
+    confirmRegistryIntegrity(record);
   }
-  runNpm(
-    [
-      "publish",
-      resolve(dirname(path), record.tarball),
-      "--access",
-      "public",
-      "--provenance",
-    ],
-    { cwd: dirname(path) },
-  );
-  confirmRegistryIntegrity(record);
 }
 
 export function parseArguments(arguments_) {

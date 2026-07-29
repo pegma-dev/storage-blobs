@@ -385,7 +385,8 @@ export function assertValidBlobPrefix(prefix: string): void {
   assertBlobPathString(prefix, "List prefix");
 }
 
-function assertValidContentType(contentType: string): string {
+/** Validates and returns a portable content-type string. */
+export function assertValidContentType(contentType: string): string {
   if (typeof contentType !== "string" || contentType.length === 0) {
     throw new BlobValidationError("Content-type must be a non-empty string.");
   }
@@ -408,7 +409,8 @@ function assertValidContentType(contentType: string): string {
  */
 const USER_METADATA_KEY = /^[a-z][a-z0-9_]*$/;
 
-function normalizeUserMetadata(
+/** Validates and freezes user metadata for portable storage. */
+export function normalizeUserMetadata(
   input: Readonly<Record<string, string>> | undefined,
 ): Readonly<Record<string, string>> {
   if (input === undefined) {

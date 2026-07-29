@@ -1,4 +1,7 @@
 {
   "files": [],
-  "references": [{ "path": "./packages/storage-blobs" }]
+  "references": [
+    { "path": "./packages/storage-blobs" },
+    { "path": "./packages/storage-azure-blob" }
+  ]
 }
