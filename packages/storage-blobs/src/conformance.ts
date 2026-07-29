@@ -482,6 +482,16 @@ export const conformanceCases: readonly ConformanceCase[] = [
     );
   }),
 
+  testCase("rejects non-ASCII content-type values", async (store) => {
+    await assert.rejects(
+      () =>
+        store.put("meta/ctype", textBytes("x"), {
+          contentType: "application/x-\u20ac",
+        }),
+      (error: unknown) => error instanceof BlobValidationError,
+    );
+  }),
+
   testCase(
     "rejects user metadata over the aggregate byte budget",
     async (store) => {
@@ -500,6 +510,31 @@ export const conformanceCases: readonly ConformanceCase[] = [
         () => store.put("meta/too-big", textBytes("x"), { userMetadata }),
         (error: unknown) => error instanceof BlobValidationError,
       );
+    },
+  ),
+
+  testCase(
+    "accepts user metadata that totals exactly the aggregate byte budget",
+    async (store) => {
+      // Eight keys "k0".."k7" (2 bytes each) and values filling the budget.
+      // 8 * 2 key bytes = 16; remaining 2032 value bytes => 254 per value.
+      const userMetadata: Record<string, string> = {};
+      for (let index = 0; index < 8; index += 1) {
+        userMetadata[`k${index}`] = "v".repeat(254);
+      }
+      let total = 0;
+      for (const [key, value] of Object.entries(userMetadata)) {
+        total += new TextEncoder().encode(key).byteLength;
+        total += new TextEncoder().encode(value).byteLength;
+      }
+      assert.equal(total, MAX_USER_METADATA_TOTAL_BYTES);
+      const put = await store.put("meta/exact", textBytes("x"), {
+        userMetadata,
+      });
+      assert.equal(put.ok, true);
+      const head = await store.head("meta/exact");
+      assert.ok(head);
+      assert.equal(head.userMetadata["k0"], "v".repeat(254));
     },
   ),
 
@@ -524,6 +559,68 @@ export const conformanceCases: readonly ConformanceCase[] = [
       assertBytesEqual(await readAll(got.body), new Uint8Array([1, 2, 3, 4]));
     },
   ),
+
+  testCase(
+    "put copies stream chunks that reuse one scratch buffer",
+    async (store) => {
+      const scratch = new Uint8Array(1);
+      let next = 1;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (next > 3) {
+            controller.close();
+            return;
+          }
+          scratch[0] = next;
+          next += 1;
+          controller.enqueue(scratch);
+        },
+      });
+      const put = await store.put("copy/stream", stream);
+      assert.equal(put.ok, true);
+      const got = await store.get("copy/stream");
+      assert.ok(got);
+      assertBytesEqual(await readAll(got.body), new Uint8Array([1, 2, 3]));
+    },
+  ),
+];
+
+/**
+ * Cases that need two independent empty backends (not two handles to one).
+ *
+ * Adapters should pass factories bound to two distinct empty containers/buckets.
+ */
+export interface DualStoreConformanceCase {
+  readonly name: string;
+  run(
+    createStoreA: () => BlobStore,
+    createStoreB: () => BlobStore,
+  ): Promise<void>;
+}
+
+export const dualStoreConformanceCases: readonly DualStoreConformanceCase[] = [
+  {
+    name: "list rejects a cursor issued by a different backend",
+    async run(createStoreA, createStoreB) {
+      const first = createStoreA();
+      const second = createStoreB();
+      await first.put("page/a", textBytes("a"));
+      await first.put("page/b", textBytes("b"));
+      await second.put("page/a", textBytes("a"));
+      await second.put("page/b", textBytes("b"));
+      const page = await first.list({ prefix: "page/", limit: 1 });
+      assert.notEqual(page.nextCursor, null);
+      await assert.rejects(
+        () =>
+          second.list({
+            prefix: "page/",
+            limit: 1,
+            cursor: page.nextCursor!,
+          }),
+        (error: unknown) => error instanceof BlobValidationError,
+      );
+    },
+  },
 ];
 
 /**

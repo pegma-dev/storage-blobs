@@ -109,6 +109,7 @@ adapter needs a dedicated small ceiling or parallel writers:
 ```ts
 import {
   concurrentConformanceCases,
+  dualStoreConformanceCases,
   sizeLimitConformanceCases,
 } from "@pegma/storage-blobs/conformance";
 ```

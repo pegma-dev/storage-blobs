@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   concurrentConformanceCases,
   conformanceCases,
+  dualStoreConformanceCases,
   sizeLimitConformanceCases,
 } from "./conformance.js";
 import {
@@ -39,6 +40,15 @@ describe("createMemoryBlobStore", () => {
       await testCase.run(() => store);
     });
   }
+
+  for (const testCase of dualStoreConformanceCases) {
+    it(testCase.name, async () => {
+      await testCase.run(
+        () => createMemoryBlobStore({ maxObjectBytes: 1_024 * 1_024 }),
+        () => createMemoryBlobStore({ maxObjectBytes: 1_024 * 1_024 }),
+      );
+    });
+  }
 });
 
 describe("memory store isolation", () => {
@@ -47,22 +57,6 @@ describe("memory store isolation", () => {
     const second = createMemoryBlobStore();
     await first.put("only-in-first", new TextEncoder().encode("secret"));
     expect(await second.get("only-in-first")).toBeNull();
-  });
-
-  it("rejects a list cursor issued by a different memory store", async () => {
-    const first = createMemoryBlobStore();
-    const second = createMemoryBlobStore();
-    await first.put("page/a", new TextEncoder().encode("a"));
-    await first.put("page/b", new TextEncoder().encode("b"));
-    const page = await first.list({ prefix: "page/", limit: 1 });
-    expect(page.nextCursor).not.toBeNull();
-    await expect(
-      second.list({
-        prefix: "page/",
-        limit: 1,
-        cursor: page.nextCursor!,
-      }),
-    ).rejects.toBeInstanceOf(BlobValidationError);
   });
 });
 

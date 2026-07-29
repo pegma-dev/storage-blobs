@@ -375,11 +375,9 @@ function assertValidContentType(contentType: string): string {
   if (typeof contentType !== "string" || contentType.length === 0) {
     throw new BlobValidationError("Content-type must be a non-empty string.");
   }
-  assertWellFormedUnicode(contentType, "Content-type");
-  if (hasDisallowedControl(contentType)) {
-    throw new BlobValidationError(
-      "Content-type must not contain control characters.",
-    );
+  // Must be portable as an HTTP Content-Type header across first-class backends.
+  if (!isPrintableAscii(contentType)) {
+    throw new BlobValidationError("Content-type must be printable ASCII.");
   }
   if (utf8ByteLength(contentType) > MAX_CONTENT_TYPE_BYTES) {
     throw new BlobValidationError(
@@ -569,7 +567,8 @@ async function readBody(
         }
         throw new BlobSizeLimitError(limitBytes);
       }
-      chunks.push(value);
+      // Copy immediately: streams may reuse one scratch buffer for every chunk.
+      chunks.push(copyBytes(value));
     }
   } catch (error) {
     if (
