@@ -2,8 +2,9 @@
 
 ## Status
 
-**Stage:** Repository bootstrap. Workspace, CI, release tooling, and planning
-docs only. No port implementation and no npm publication.
+**Stage:** Phase 1 landed on the port track. `BlobStore`, in-memory reference
+store, and conformance suite exist; cloud adapters and npm publication are
+still open.
 
 **Package (planned first release):** `@pegma/storage-blobs@0.1.0`
 
@@ -161,7 +162,7 @@ All publishable packages live in this monorepo (same layout as storage-core).
 
 ## Delivery phases
 
-### Phase 0 — repository bootstrap (this commit)
+### Phase 0 — repository bootstrap (done)
 
 - Monorepo workspace, TypeScript, Vitest, Prettier, Node 22/24 CI, CodeQL.
 - Trusted-publisher release scripts (not yet configured on npm).
@@ -170,7 +171,7 @@ All publishable packages live in this monorepo (same layout as storage-core).
 
 **Exit criterion:** green CI on `main`; docs describe scope and non-goals.
 
-### Phase 1 — port, memory store, conformance
+### Phase 1 — port, memory store, conformance (done)
 
 - Define `BlobStore` and related types.
 - Implement `createMemoryBlobStore`.
