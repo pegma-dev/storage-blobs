@@ -7,12 +7,12 @@ passes the suite against a **real empty backend** (never a mocked client).
 
 ## Packages and layout
 
-| Package                        | Role                                    |
-| ------------------------------ | --------------------------------------- |
-| `@pegma/storage-blobs`         | Port, memory store, conformance export  |
-| `@pegma/storage-azure-blob`    | Azure Blob (this monorepo, later phase) |
-| `@pegma/storage-cloudflare-r2` | Cloudflare R2 (later phase)             |
-| `@pegma/storage-s3`            | AWS S3 / S3-compatible (later phase)    |
+| Package                        | Role                                   |
+| ------------------------------ | -------------------------------------- |
+| `@pegma/storage-blobs`         | Port, memory store, conformance export |
+| `@pegma/storage-azure-blob`    | Azure Blob (this monorepo)             |
+| `@pegma/storage-cloudflare-r2` | Cloudflare R2 (this monorepo)          |
+| `@pegma/storage-s3`            | AWS S3 / S3-compatible (later phase)   |
 
 One package per backend family. Depend on `@pegma/storage-blobs` at an exact
 published version when consumers install you; workspace `*` is fine inside this
@@ -162,10 +162,10 @@ describe("my adapter", () => {
 
 ## CI expectations
 
-Adapters in this monorepo run the suite against Azurite, a real empty R2
-bucket, LocalStack/MinIO/S3, or an equivalent **empty** service. Mocked SDK
-clients are not enough. Prefer ephemeral containers/buckets per job and tear
-them down.
+Adapters in this monorepo run the suite against Azurite (Azure), LocalStack S3
+as an S3-compatible stand-in for R2 (or a real empty R2 bucket),
+LocalStack/MinIO/S3, or an equivalent **empty** service. Mocked SDK clients are
+not enough. Prefer ephemeral containers/buckets per job and tear them down.
 
 ## Freezing the contract
 
