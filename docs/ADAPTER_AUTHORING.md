@@ -12,7 +12,7 @@ passes the suite against a **real empty backend** (never a mocked client).
 | `@pegma/storage-blobs`         | Port, memory store, conformance export |
 | `@pegma/storage-azure-blob`    | Azure Blob (this monorepo)             |
 | `@pegma/storage-cloudflare-r2` | Cloudflare R2 (this monorepo)          |
-| `@pegma/storage-s3`            | AWS S3 / S3-compatible (later phase)   |
+| `@pegma/storage-s3`            | AWS S3 / S3-compatible (this monorepo) |
 
 One package per backend family. Depend on `@pegma/storage-blobs` at an exact
 published version when consumers install you; workspace `*` is fine inside this

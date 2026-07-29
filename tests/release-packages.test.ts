@@ -41,6 +41,7 @@ describe("release package metadata", () => {
       "@pegma/storage-blobs",
       "@pegma/storage-azure-blob",
       "@pegma/storage-cloudflare-r2",
+      "@pegma/storage-s3",
     ]);
   });
 
