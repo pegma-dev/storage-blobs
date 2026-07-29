@@ -371,19 +371,22 @@ export const conformanceCases: readonly ConformanceCase[] = [
     },
   ),
 
-  testCase("list pages with opaque cursors", async (store) => {
+  storeFactoryCase("list pages with opaque cursors", async (createStore) => {
+    // Seed through one handle; continue the cursor through a fresh handle to
+    // the same physical backend so adapters cannot embed process-local state.
+    const writer = createStore();
     for (const key of ["page/a", "page/b", "page/c", "page/d"]) {
-      await store.put(key, textBytes(key));
+      await writer.put(key, textBytes(key));
     }
 
-    const first = await store.list({ prefix: "page/", limit: 2 });
+    const first = await writer.list({ prefix: "page/", limit: 2 });
     assert.deepEqual(
       first.objects.map((entry) => entry.key),
       ["page/a", "page/b"],
     );
     assert.notEqual(first.nextCursor, null);
 
-    const second = await store.list({
+    const second = await createStore().list({
       prefix: "page/",
       limit: 2,
       cursor: first.nextCursor!,

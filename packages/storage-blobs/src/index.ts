@@ -195,9 +195,10 @@ export interface BlobStore {
    * Stores bytes at `key`, replacing any existing object unless a condition
    * refuses the write.
    *
-   * `body` may be a `Uint8Array` or a `ReadableStream` of chunks. The stream
-   * is consumed fully on success or failure once size is exceeded. Stored
-   * bytes are exactly the concatenation of chunks; empty bodies are allowed.
+   * `body` may be a `Uint8Array` or a `ReadableStream` of chunks. On success
+   * the stream is fully consumed. If the body exceeds the size ceiling, the
+   * remaining stream may be cancelled rather than drained. Stored bytes are
+   * exactly the concatenation of chunks; empty bodies are allowed.
    */
   put(
     key: string,
