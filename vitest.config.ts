@@ -4,5 +4,7 @@ export default defineConfig({
   test: {
     include: ["packages/**/*.test.ts", "tests/**/*.test.ts"],
     exclude: ["**/dist/**", "**/node_modules/**"],
+    globalSetup: ["./test/azurite.ts"],
+    testTimeout: 60_000,
   },
 });

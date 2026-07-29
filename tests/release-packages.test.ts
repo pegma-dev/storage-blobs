@@ -39,6 +39,7 @@ describe("release package metadata", () => {
   it("keeps the exact public package inventory", () => {
     expect(RELEASE_PACKAGES.map(({ name }) => name)).toEqual([
       "@pegma/storage-blobs",
+      "@pegma/storage-azure-blob",
     ]);
   });
 

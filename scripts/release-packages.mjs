@@ -13,15 +13,20 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const PACKAGE = {
-  directory: "storage-blobs",
-  name: "@pegma/storage-blobs",
-};
 const REPOSITORY_URL = "git+https://github.com/pegma-dev/storage-blobs.git";
 const REVIEWED_NPM_VERSION = "11.18.0";
 const STABLE_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 
-export const RELEASE_PACKAGES = [PACKAGE];
+export const RELEASE_PACKAGES = [
+  {
+    directory: "storage-blobs",
+    name: "@pegma/storage-blobs",
+  },
+  {
+    directory: "storage-azure-blob",
+    name: "@pegma/storage-azure-blob",
+  },
+];
 
 function fail(message) {
   throw new Error(message);
@@ -146,22 +151,13 @@ export function validateReleaseTag(options = {}) {
   return { headCommit, releaseTag };
 }
 
-export async function validateRepository(options = {}) {
-  const root = resolve(options.root ?? defaultRoot());
-  const rootManifest = await readJson(join(root, "package.json"));
-  const packageDirectory = join(root, "packages", PACKAGE.directory);
+async function validateOnePackage(root, definition, lockfile) {
+  const packageDirectory = join(root, "packages", definition.directory);
   const manifest = await readJson(join(packageDirectory, "package.json"));
-  const lockfile = await readJson(join(root, "package-lock.json"));
-  const lockEntry = lockfile.packages?.[`packages/${PACKAGE.directory}`];
+  const lockEntry = lockfile.packages?.[`packages/${definition.directory}`];
 
   if (
-    rootManifest.private !== true ||
-    rootManifest.packageManager !== `npm@${REVIEWED_NPM_VERSION}`
-  ) {
-    fail(`the private root must pin npm@${REVIEWED_NPM_VERSION}`);
-  }
-  if (
-    manifest.name !== PACKAGE.name ||
+    manifest.name !== definition.name ||
     !STABLE_SEMVER.test(manifest.version) ||
     manifest.private === true ||
     manifest.license !== "MIT" ||
@@ -170,9 +166,9 @@ export async function validateRepository(options = {}) {
     manifest.engines?.node !== ">=22" ||
     manifest.repository?.type !== "git" ||
     manifest.repository?.url !== REPOSITORY_URL ||
-    manifest.repository?.directory !== `packages/${PACKAGE.directory}`
+    manifest.repository?.directory !== `packages/${definition.directory}`
   ) {
-    fail(`${PACKAGE.name} has invalid public package metadata`);
+    fail(`${definition.name} has invalid public package metadata`);
   }
   if (
     !Array.isArray(manifest.files) ||
@@ -181,7 +177,7 @@ export async function validateRepository(options = {}) {
     typeof manifest.scripts?.prepack !== "string" ||
     !manifest.scripts.prepack.includes("build")
   ) {
-    fail(`${PACKAGE.name} has an unsafe package allowlist or prepack`);
+    fail(`${definition.name} has an unsafe package allowlist or prepack`);
   }
   const targets = exportTargets(manifest.exports);
   if (
@@ -193,13 +189,40 @@ export async function validateRepository(options = {}) {
         target.includes(".."),
     )
   ) {
-    fail(`${PACKAGE.name} exports must point into dist`);
+    fail(`${definition.name} exports must point into dist`);
   }
   await stat(join(packageDirectory, "README.md"));
   await stat(join(packageDirectory, "LICENSE"));
   if (lockEntry?.version !== manifest.version) {
-    fail(`${PACKAGE.name} version is not synchronized with package-lock.json`);
+    fail(
+      `${definition.name} version is not synchronized with package-lock.json`,
+    );
   }
+  return { definition, packageDirectory, manifest };
+}
+
+export async function validateRepository(options = {}) {
+  const root = resolve(options.root ?? defaultRoot());
+  const rootManifest = await readJson(join(root, "package.json"));
+  const lockfile = await readJson(join(root, "package-lock.json"));
+
+  if (
+    rootManifest.private !== true ||
+    rootManifest.packageManager !== `npm@${REVIEWED_NPM_VERSION}`
+  ) {
+    fail(`the private root must pin npm@${REVIEWED_NPM_VERSION}`);
+  }
+
+  const packages = [];
+  for (const definition of RELEASE_PACKAGES) {
+    packages.push(await validateOnePackage(root, definition, lockfile));
+  }
+
+  const versions = new Set(packages.map(({ manifest }) => manifest.version));
+  if (versions.size !== 1) {
+    fail("release packages must share one exact version");
+  }
+  const sharedVersion = packages[0].manifest.version;
 
   const publicWorkspaces = [];
   for (const entry of await readdir(join(root, "packages"), {
@@ -215,7 +238,9 @@ export async function validateRepository(options = {}) {
       if (error?.code !== "ENOENT") throw error;
     }
   }
-  if (publicWorkspaces.length !== 1 || publicWorkspaces[0] !== PACKAGE.name) {
+  publicWorkspaces.sort();
+  const expected = RELEASE_PACKAGES.map(({ name }) => name).sort();
+  if (JSON.stringify(publicWorkspaces) !== JSON.stringify(expected)) {
     fail("public workspace inventory does not match the reviewed release list");
   }
 
@@ -243,8 +268,8 @@ export async function validateRepository(options = {}) {
   }
 
   const releaseTag = options.releaseTag ?? process.env.RELEASE_TAG;
-  if (releaseTag !== undefined && releaseTag !== `v${manifest.version}`) {
-    fail(`release tag must be v${manifest.version}`);
+  if (releaseTag !== undefined && releaseTag !== `v${sharedVersion}`) {
+    fail(`release tag must be v${sharedVersion}`);
   }
   const prerelease =
     options.releasePrerelease ?? process.env.RELEASE_PRERELEASE ?? false;
@@ -258,7 +283,15 @@ export async function validateRepository(options = {}) {
       expectedReleaseCommit: options.expectedReleaseCommit,
     });
   }
-  return { root, manifest, packageDirectory, releaseTag };
+  // Back-compat fields used by prepareRelease for the primary package.
+  const primary = packages[0];
+  return {
+    root,
+    packages,
+    manifest: primary.manifest,
+    packageDirectory: primary.packageDirectory,
+    releaseTag,
+  };
 }
 
 function verifyPackedFiles(manifest, files) {
