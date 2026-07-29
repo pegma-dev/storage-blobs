@@ -474,7 +474,9 @@ export function createCloudflareR2BlobStore(
         }
         if (
           ifMatch !== undefined &&
-          (isPreconditionFailed(error) || isNotFound(error))
+          (isPreconditionFailed(error) ||
+            isConflict(error) ||
+            isNotFound(error))
         ) {
           if (isNotFound(error)) {
             return { ok: false, reason: "missing" };
