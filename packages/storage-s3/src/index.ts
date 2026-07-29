@@ -32,8 +32,10 @@ const S3_LIST_CURSOR_PREFIX = "pegma-s3-list-v1:";
 
 export interface S3BlobStoreOptions {
   /**
-   * Preconfigured S3 client aimed at AWS S3 or an S3-compatible endpoint (LocalStack, MinIO, etc.). The host owns credentials, endpoint, and networking; this
-   * package never reads environment secrets itself.
+   * Preconfigured S3 client aimed at AWS S3 or a suite-faithful S3-compatible
+   * endpoint (LocalStack is the CI harness). The host owns credentials,
+   * endpoint, and networking; this package never reads environment secrets
+   * itself.
    */
   readonly client: S3Client;
   /**
@@ -346,19 +348,27 @@ export function createS3BlobStore(options: S3BlobStoreOptions): BlobStore {
   const client = options.client;
   const bucket = options.bucket;
   const backendId = options.backendId ?? `s3|${options.endpoint}|${bucket}`;
+  // After a successful object op or HeadBucket, further key-miss paths skip
+  // HeadBucket (NoSuchKey already proves the bucket exists).
+  let bucketVerified = false;
 
   /**
    * Object-level 404s are sometimes returned as bare NotFound for both a free
    * key and a missing bucket. Confirm the bucket still exists before treating
-   * the key as free.
+   * the key as free (cached after first verification).
    */
   async function assertBucketPresent(objectError: unknown): Promise<void> {
     const name = errorName(objectError);
     if (name === "NoSuchKey") {
+      bucketVerified = true;
+      return;
+    }
+    if (bucketVerified) {
       return;
     }
     try {
       await client.send(new HeadBucketCommand({ Bucket: bucket }));
+      bucketVerified = true;
     } catch (bucketError) {
       if (
         isNoSuchBucket(bucketError) ||
@@ -382,6 +392,7 @@ export function createS3BlobStore(options: S3BlobStoreOptions): BlobStore {
       const response = await client.send(
         new HeadObjectCommand({ Bucket: bucket, Key: key }),
       );
+      bucketVerified = true;
       return toObjectInfo(key, {
         contentLength: response.ContentLength,
         contentType: response.ContentType,
@@ -449,6 +460,7 @@ export function createS3BlobStore(options: S3BlobStoreOptions): BlobStore {
       const finishPut = async (response: {
         ETag?: string | undefined;
       }): Promise<PutResult> => {
+        bucketVerified = true;
         const etag = response.ETag;
         if (etag === undefined || etag.length === 0) {
           // Some S3-compatible servers omit ETag on put; re-read via HEAD.
@@ -493,19 +505,49 @@ export function createS3BlobStore(options: S3BlobStoreOptions): BlobStore {
             );
           }
         }
+        if (ifMatch !== undefined && isNotFound(error)) {
+          return { ok: false, reason: "missing" };
+        }
         if (
           ifMatch !== undefined &&
-          (isPreconditionFailed(error) ||
-            isConflict(error) ||
-            isNotFound(error))
+          (isPreconditionFailed(error) || isConflict(error))
         ) {
-          if (isNotFound(error)) {
-            return { ok: false, reason: "missing" };
-          }
           try {
             const head = await headRaw(key);
             if (head === null) {
               return { ok: false, reason: "missing" };
+            }
+            if (isConflict(error) && head.etag === ifMatch) {
+              // 409 is retryable; etag still matches — try once more.
+              try {
+                return await finishPut(
+                  await client.send(new PutObjectCommand(input)),
+                );
+              } catch (retryError) {
+                if (isNotFound(retryError)) {
+                  return { ok: false, reason: "missing" };
+                }
+                if (
+                  isPreconditionFailed(retryError) ||
+                  isConflict(retryError)
+                ) {
+                  const after = await headRaw(key);
+                  if (after === null) {
+                    return { ok: false, reason: "missing" };
+                  }
+                  if (after.etag === ifMatch && isConflict(retryError)) {
+                    throw new BlobStoreError(
+                      `S3 put conflict persisted for ${JSON.stringify(key)}.`,
+                      { cause: retryError },
+                    );
+                  }
+                  return { ok: false, reason: "changed" };
+                }
+                throw new BlobStoreError(
+                  `S3 put failed for ${JSON.stringify(key)}.`,
+                  { cause: retryError },
+                );
+              }
             }
             return { ok: false, reason: "changed" };
           } catch (headError) {

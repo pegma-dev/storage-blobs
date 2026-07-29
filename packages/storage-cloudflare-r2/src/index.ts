@@ -351,19 +351,25 @@ export function createCloudflareR2BlobStore(
   const client = options.client;
   const bucket = options.bucket;
   const backendId = options.backendId ?? `r2|${options.endpoint}|${bucket}`;
+  let bucketVerified = false;
 
   /**
    * Object-level 404s are sometimes returned as bare NotFound for both a free
    * key and a missing bucket. Confirm the bucket still exists before treating
-   * the key as free.
+   * the key as free (cached after first verification).
    */
   async function assertBucketPresent(objectError: unknown): Promise<void> {
     const name = errorName(objectError);
     if (name === "NoSuchKey") {
+      bucketVerified = true;
+      return;
+    }
+    if (bucketVerified) {
       return;
     }
     try {
       await client.send(new HeadBucketCommand({ Bucket: bucket }));
+      bucketVerified = true;
     } catch (bucketError) {
       if (
         isNoSuchBucket(bucketError) ||
@@ -387,6 +393,7 @@ export function createCloudflareR2BlobStore(
       const response = await client.send(
         new HeadObjectCommand({ Bucket: bucket, Key: key }),
       );
+      bucketVerified = true;
       return toObjectInfo(key, {
         contentLength: response.ContentLength,
         contentType: response.ContentType,
@@ -454,6 +461,7 @@ export function createCloudflareR2BlobStore(
       const finishPut = async (response: {
         ETag?: string | undefined;
       }): Promise<PutResult> => {
+        bucketVerified = true;
         const etag = response.ETag;
         if (etag === undefined || etag.length === 0) {
           // Some S3-compatible servers omit ETag on put; re-read via HEAD.
@@ -498,19 +506,48 @@ export function createCloudflareR2BlobStore(
             );
           }
         }
+        if (ifMatch !== undefined && isNotFound(error)) {
+          return { ok: false, reason: "missing" };
+        }
         if (
           ifMatch !== undefined &&
-          (isPreconditionFailed(error) ||
-            isConflict(error) ||
-            isNotFound(error))
+          (isPreconditionFailed(error) || isConflict(error))
         ) {
-          if (isNotFound(error)) {
-            return { ok: false, reason: "missing" };
-          }
           try {
             const head = await headRaw(key);
             if (head === null) {
               return { ok: false, reason: "missing" };
+            }
+            if (isConflict(error) && head.etag === ifMatch) {
+              try {
+                return await finishPut(
+                  await client.send(new PutObjectCommand(input)),
+                );
+              } catch (retryError) {
+                if (isNotFound(retryError)) {
+                  return { ok: false, reason: "missing" };
+                }
+                if (
+                  isPreconditionFailed(retryError) ||
+                  isConflict(retryError)
+                ) {
+                  const after = await headRaw(key);
+                  if (after === null) {
+                    return { ok: false, reason: "missing" };
+                  }
+                  if (after.etag === ifMatch && isConflict(retryError)) {
+                    throw new BlobStoreError(
+                      `R2 put conflict persisted for ${JSON.stringify(key)}.`,
+                      { cause: retryError },
+                    );
+                  }
+                  return { ok: false, reason: "changed" };
+                }
+                throw new BlobStoreError(
+                  `R2 put failed for ${JSON.stringify(key)}.`,
+                  { cause: retryError },
+                );
+              }
             }
             return { ok: false, reason: "changed" };
           } catch (headError) {

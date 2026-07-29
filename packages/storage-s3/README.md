@@ -7,8 +7,9 @@ AWS S3 / S3-compatible adapter for [`@pegma/storage-blobs`](../storage-blobs).
 
 > [!IMPORTANT]
 > Early `0.x`. Not published yet. Verified in this monorepo's CI against
-> LocalStack S3. Point the same client at real AWS S3 (or another
-> S3-compatible endpoint) for production.
+> LocalStack S3. Point the same client at real AWS S3 for production. Other
+> S3-compatible products must pass the frozen conformance suite before hosts
+> rely on them (MinIO is not a CI-proven target for this package).
 
 ## Usage
 
@@ -18,7 +19,7 @@ import { createS3BlobStore } from "@pegma/storage-s3";
 
 const client = new S3Client({
   region: process.env.AWS_REGION ?? "us-east-1",
-  // Optional for AWS; required for path-style endpoints (LocalStack, MinIO, …)
+  // Optional for AWS; set for path-style / custom endpoints (e.g. LocalStack)
   // forcePathStyle: true,
   // endpoint: process.env.S3_ENDPOINT,
 });
