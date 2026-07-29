@@ -393,6 +393,7 @@ function assertValidContentType(contentType: string): string {
   if (!isPrintableAscii(contentType)) {
     throw new BlobValidationError("Content-type must be printable ASCII.");
   }
+  assertNoSurroundingWhitespace(contentType, "Content-type");
   if (utf8ByteLength(contentType) > MAX_CONTENT_TYPE_BYTES) {
     throw new BlobValidationError(
       `Content-type exceeds ${MAX_CONTENT_TYPE_BYTES} UTF-8 bytes.`,
