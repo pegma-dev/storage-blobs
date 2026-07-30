@@ -16,6 +16,7 @@ export interface ValidationOptions {
 export interface ReleaseCommandOptions extends ValidationOptions {
   readonly manifest?: string;
   readonly output?: string;
+  readonly expectedManifestDigest?: string;
 }
 
 export interface PublicPackageManifest {
@@ -52,9 +53,18 @@ export function decidePublication(
   registryIntegrity: string | null,
 ): "publish" | "skip";
 
-export function prepareRelease(
-  options?: ReleaseCommandOptions,
-): Promise<{ manifestPath: string; manifest: unknown }>;
+export function digestManifest(bytes: Uint8Array | string): string;
+
+export function verifyManifestDigest(
+  bytes: Uint8Array | string,
+  expectedDigest: string | undefined,
+): string;
+
+export function prepareRelease(options?: ReleaseCommandOptions): Promise<{
+  manifestPath: string;
+  manifest: unknown;
+  manifestDigest: string;
+}>;
 
 export function publishPreparedRelease(
   options?: ReleaseCommandOptions,

@@ -6,9 +6,11 @@ import { describe, expect, it } from "vitest";
 import {
   RELEASE_PACKAGES,
   decidePublication,
+  digestManifest,
   parseArguments,
   validateReleaseTag,
   validateRepository,
+  verifyManifestDigest,
 } from "../scripts/release-packages.mjs";
 
 const git = process.platform === "win32" ? "git.exe" : "git";
@@ -34,6 +36,15 @@ describe("release package metadata", () => {
     expect(parseArguments(["--", "--output", ".release"])).toEqual({
       output: ".release",
     });
+  });
+
+  it("parses the expected prepared manifest digest", () => {
+    expect(
+      parseArguments(["--expected-manifest-digest", "a".repeat(64)]),
+    ).toEqual({ expectedManifestDigest: "a".repeat(64) });
+    expect(() => parseArguments(["--expected-manifest-digest"])).toThrow(
+      "unknown or incomplete argument",
+    );
   });
 
   it("keeps the exact public package inventory", () => {
@@ -164,6 +175,58 @@ describe("release source authentication", () => {
     expect(publish).toContain("npm run release:publish");
     expect(workflow).not.toContain("workflow_dispatch");
     expect(workflow).toContain("retention-days: 30");
+  });
+});
+
+describe("prepared manifest anchoring", () => {
+  const manifestBytes = '{"schemaVersion":2}\n';
+  const digest = digestManifest(manifestBytes);
+
+  it("accepts the digest recorded by the preparation job", () => {
+    expect(digest).toMatch(/^[0-9a-f]{64}$/u);
+    expect(verifyManifestDigest(manifestBytes, digest)).toBe(digest);
+    expect(verifyManifestDigest(Buffer.from(manifestBytes), digest)).toBe(
+      digest,
+    );
+  });
+
+  it("rejects a manifest replaced alongside its tarballs", () => {
+    expect(() =>
+      verifyManifestDigest('{"schemaVersion":2} \n', digest),
+    ).toThrow("does not match the digest recorded by the preparation job");
+  });
+
+  it("refuses to publish without a usable expected digest", () => {
+    expect(() => verifyManifestDigest(manifestBytes, undefined)).toThrow(
+      "an expected prepared manifest digest is required",
+    );
+    expect(() => verifyManifestDigest(manifestBytes, "")).toThrow(
+      "an expected prepared manifest digest is required",
+    );
+    expect(() => verifyManifestDigest(manifestBytes, "not-a-digest")).toThrow(
+      "must be SHA-256 hexadecimal",
+    );
+    expect(() =>
+      verifyManifestDigest(manifestBytes, digest.toUpperCase()),
+    ).toThrow("must be SHA-256 hexadecimal");
+  });
+
+  it("carries the digest across the job boundary in run metadata", () => {
+    const workflow = readFileSync(
+      join(process.cwd(), ".github", "workflows", "publish.yml"),
+      "utf8",
+    );
+    const jobs = workflow.slice(workflow.indexOf("\njobs:\n"));
+    const publishStart = jobs.indexOf("\n  publish:");
+    const prepare = jobs.slice(jobs.indexOf("  prepare:"), publishStart);
+    const publish = jobs.slice(publishStart);
+    expect(prepare).toContain(
+      "manifest-digest: ${{ steps.manifest.outputs.digest }}",
+    );
+    expect(publish).toContain(
+      "RELEASE_MANIFEST_DIGEST: ${{ needs.prepare.outputs.manifest-digest }}",
+    );
+    expect(publish).toContain("--expected-manifest-digest");
   });
 });
 

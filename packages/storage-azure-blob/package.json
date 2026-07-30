@@ -1,6 +1,6 @@
 {
   "name": "@pegma/storage-azure-blob",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Azure Blob Storage adapter for @pegma/storage-blobs.",
   "license": "MIT",
   "type": "module",
@@ -30,7 +30,7 @@
   },
   "dependencies": {
     "@azure/storage-blob": "^12.29.1",
-    "@pegma/storage-blobs": "0.1.0"
+    "@pegma/storage-blobs": "0.1.1"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

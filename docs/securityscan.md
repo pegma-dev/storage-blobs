@@ -105,6 +105,13 @@ authorized the caller. Attacker-relevant surfaces:
 ## Findings
 
 ### [MEDIUM] Dev-only dependency chain (azurite) carries 12 known vulnerabilities
+
+✅ Resolved 2026-07-29 — added a gating `npm audit --omit=dev --audit-level=low`
+step to CI so any _runtime_ advisory fails the build; the dev-only azurite chain
+has no upstream fix (3.36.0 is the latest release and npm's proposed 3.33.0 is a
+downgrade that keeps the same vulnerable `rimraf` and pulls _older_ `uuid`
+and `@azure/ms-rest-js`), so it stays a tracked non-gating item.
+
 - **Location:** root `package.json:28` (`"azurite": "^3.36.0"`); full chains in
   `npm audit` output (appendix below).
 - **Evidence:** 5 high — `brace-expansion` (GHSA-mh99-v99m-4gvg, DoS via
@@ -122,10 +129,17 @@ authorized the caller. Attacker-relevant surfaces:
 - **Fix:** Track an azurite release that drops the vulnerable transitives and
   bump the devDependency when available (npm currently proposes azurite
   3.33.0 as the "fix", which is a downgrade — verify before applying). Add
-  `npm audit --omit=dev` (expected clean) to CI so a *runtime* advisory fails
+  `npm audit --omit=dev` (expected clean) to CI so a _runtime_ advisory fails
   the build, and keep dev-chain advisories as a tracked, non-gating item.
 
 ### [LOW] Publish pipeline trusts the cross-job artifact's self-consistency
+
+✅ Resolved 2026-07-29 — `prepare` now records the SHA-256 of
+`package-manifest.json` as a job output and `publish` passes it to
+`release:publish` via `--expected-manifest-digest`, so the manifest is anchored
+across the job boundary through run metadata instead of the artifact; the digest
+is required and verified with `timingSafeEqual` before the manifest is parsed.
+
 - **Location:** `.github/workflows/publish.yml:74-86, 113-120`;
   `scripts/release-packages.mjs:509-560` (`verifyPreparedManifest`).
 - **Evidence:** the `publish` job downloads `.release/` (tarballs plus
@@ -154,28 +168,29 @@ authorized the caller. Attacker-relevant surfaces:
 
 | Severity | Count |
 | -------- | ----- |
-| Critical | 0 |
-| High | 0 |
-| Medium | 1 |
-| Low | 1 |
+| Critical | 0     |
+| High     | 0     |
+| Medium   | 1     |
+| Low      | 1     |
 
-| Layer | Status |
-| ----- | ------ |
-| Frontend | Not present (library repo) |
-| Port (`@pegma/storage-blobs`) | Clean — strict validation, copy-on-store, store-bound cursors |
-| Adapters (azure-blob, s3, cloudflare-r2) | Clean — credentials host-injected, no env reads, SAS stripped from cursors |
-| Data layer | Not present (no query language; opaque object storage) |
-| Config & CI | Strong — pinned actions, least-privilege permissions, OIDC trusted publishing, signed-tag enforcement; one Low on artifact handoff |
-| Dependencies | Medium — 12 advisories, all confined to the dev-only azurite chain |
+| Layer                                    | Status                                                                                                                                          |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Frontend                                 | Not present (library repo)                                                                                                                      |
+| Port (`@pegma/storage-blobs`)            | Clean — strict validation, copy-on-store, store-bound cursors                                                                                   |
+| Adapters (azure-blob, s3, cloudflare-r2) | Clean — credentials host-injected, no env reads, SAS stripped from cursors                                                                      |
+| Data layer                               | Not present (no query language; opaque object storage)                                                                                          |
+| Config & CI                              | Strong — pinned actions, least-privilege permissions, OIDC trusted publishing, signed-tag enforcement; artifact handoff Low resolved 2026-07-29 |
+| Dependencies                             | Medium — 12 advisories, all confined to the dev-only azurite chain; runtime audit gate added 2026-07-29, shipped dependencies clean             |
 
 ### Unverified / Needs Manual Review
 
-- **`.tmp-sc/` working-tree scratch copy of storage-core** — untracked and
-  git-ignored, so it cannot ship, but confirm it is intentional local scratch
-  and delete if stale.
-- **npm audit "fix" for azurite (3.33.0)** — flagged semver-major and is a
-  version *downgrade*; needs manual verification against the azurite changelog
-  before applying.
+- **`.tmp-sc/` working-tree scratch copy of storage-core** — ✅ Resolved
+  2026-07-29 — confirmed local-only: neither `.tmp-sc/` nor `.grok/` is tracked,
+  and both are absent from a fresh clone. Nothing to remove in the repository.
+- **npm audit "fix" for azurite (3.33.0)** — ✅ Resolved 2026-07-29 — verified
+  and rejected. 3.33.0 declares the same vulnerable `rimraf ^3.0.2` plus older
+  `uuid ^3.3.2` and `@azure/ms-rest-js ^1.5.0`, so the "fix" is a downgrade that
+  resolves nothing. The devDependency stays at `^3.36.0`.
 
 ### Appendix — npm audit (raw, trimmed)
 

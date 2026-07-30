@@ -17,6 +17,8 @@ concurrency:
 jobs:
   prepare:
     runs-on: ubuntu-latest
+    outputs:
+      manifest-digest: ${{ steps.manifest.outputs.digest }}
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name }}
       RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
@@ -71,6 +73,17 @@ jobs:
       - name: Prepare and verify the release tarball
         run: npm run release:pack -- -- --require-clean --require-main-ancestor --require-release-tag --expected-release-commit "${RELEASE_COMMIT}" --output .release
 
+      # Crosses the job boundary through run metadata rather than the artifact,
+      # so the publish job cannot be fooled by a self-consistent replacement of
+      # the manifest and the tarballs it describes.
+      - name: Record the prepared manifest digest
+        id: manifest
+        shell: bash
+        run: |
+          digest="$(sha256sum .release/package-manifest.json | cut -d ' ' -f 1)"
+          printf 'digest=%s\n' "${digest}" >> "${GITHUB_OUTPUT}"
+          printf 'Prepared manifest SHA-256 %s\n' "${digest}" >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Upload the prepared release
         id: upload
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
@@ -95,6 +108,7 @@ jobs:
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name }}
       RELEASE_COMMIT: ${{ github.sha }}
+      RELEASE_MANIFEST_DIGEST: ${{ needs.prepare.outputs.manifest-digest }}
 
     steps:
       - name: Check out the exact release tag
@@ -117,4 +131,4 @@ jobs:
           path: .release
 
       - name: Publish the verified prepared tarball
-        run: npm run release:publish -- -- --expected-release-commit "${RELEASE_COMMIT}" --manifest .release/package-manifest.json
+        run: npm run release:publish -- -- --expected-release-commit "${RELEASE_COMMIT}" --expected-manifest-digest "${RELEASE_MANIFEST_DIGEST}" --manifest .release/package-manifest.json
