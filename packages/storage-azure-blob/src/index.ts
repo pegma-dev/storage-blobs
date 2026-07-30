@@ -283,7 +283,15 @@ export function createAzureBlobStore(
       return;
     }
     if (ensureContainer === undefined) {
-      ensureContainer = container.createIfNotExists().then(() => undefined);
+      // Memoize only success: a cached rejection would replay the original
+      // failure on every operation for the lifetime of the store.
+      ensureContainer = container.createIfNotExists().then(
+        () => undefined,
+        (error: unknown) => {
+          ensureContainer = undefined;
+          throw error;
+        },
+      );
     }
     await ensureContainer;
   }
