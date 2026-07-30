@@ -12,6 +12,7 @@ import {
   DEFAULT_MAX_OBJECT_BYTES,
   assertValidBlobKey,
   assertValidBlobPrefix,
+  assertValidCacheControl,
   assertValidContentType,
   normalizeUserMetadata,
   type BlobGetResult,
@@ -228,6 +229,7 @@ function toObjectInfo(
   props: {
     contentLength: number | undefined;
     contentType: string | undefined;
+    cacheControl: string | undefined;
     etag: string | undefined;
     metadata: Record<string, string> | undefined;
   },
@@ -241,6 +243,11 @@ function toObjectInfo(
     key,
     size: props.contentLength ?? 0,
     contentType: props.contentType ?? DEFAULT_CONTENT_TYPE,
+    // Azurite reports a cleared cache-control as "" rather than absent.
+    cacheControl:
+      props.cacheControl === undefined || props.cacheControl.length === 0
+        ? undefined
+        : props.cacheControl,
     etag: props.etag,
     userMetadata: metadataFromAzure(props.metadata),
   };
@@ -316,6 +323,10 @@ export function createAzureBlobStore(
       const contentType = assertValidContentType(
         putOptions?.contentType ?? DEFAULT_CONTENT_TYPE,
       );
+      const cacheControl =
+        putOptions?.cacheControl === undefined
+          ? undefined
+          : assertValidCacheControl(putOptions.cacheControl);
       const userMetadata = normalizeUserMetadata(putOptions?.userMetadata);
       const limitBytes = assertMaxBytes(putOptions?.maxBytes, maxObjectBytes);
       const bytes = await readBody(body, limitBytes);
@@ -332,12 +343,18 @@ export function createAzureBlobStore(
 
       try {
         const uploadOptions: {
-          blobHTTPHeaders: { blobContentType: string };
+          blobHTTPHeaders: {
+            blobContentType: string;
+            blobCacheControl?: string;
+          };
           metadata?: Record<string, string>;
           conditions?: { ifNoneMatch: "*" } | { ifMatch: string };
         } = {
           blobHTTPHeaders: { blobContentType: contentType },
         };
+        if (cacheControl !== undefined) {
+          uploadOptions.blobHTTPHeaders.blobCacheControl = cacheControl;
+        }
         if (Object.keys(userMetadata).length > 0) {
           uploadOptions.metadata = { ...userMetadata };
         }
@@ -409,6 +426,7 @@ export function createAzureBlobStore(
       const info = toObjectInfo(key, {
         contentLength: download.contentLength,
         contentType: download.contentType,
+        cacheControl: download.cacheControl,
         etag: download.etag,
         metadata: download.metadata,
       });
@@ -440,6 +458,7 @@ export function createAzureBlobStore(
         return toObjectInfo(key, {
           contentLength: props.contentLength,
           contentType: props.contentType,
+          cacheControl: props.cacheControl,
           etag: props.etag,
           metadata: props.metadata,
         });

@@ -7,7 +7,7 @@ Object (blob) storage for [Pegma](https://pegma.dev) components — the byte
 counterpart to structured records in `@pegma/storage-core`.
 
 > [!IMPORTANT]
-> Storage Blobs is early `0.x`. Packages are published at `0.1.0`; pin exact
+> Storage Blobs is early `0.x`. Packages are published at `0.2.0`; pin exact
 > versions. The public API is not frozen.
 
 ## Why it exists
@@ -27,10 +27,10 @@ application path.
 
 | Package                        | Role                                  | Status      |
 | ------------------------------ | ------------------------------------- | ----------- |
-| `@pegma/storage-blobs`         | Port, memory store, conformance suite | `0.1.0` npm |
-| `@pegma/storage-azure-blob`    | Azure Blob Storage adapter            | `0.1.0` npm |
-| `@pegma/storage-cloudflare-r2` | Cloudflare R2 adapter                 | `0.1.0` npm |
-| `@pegma/storage-s3`            | AWS S3 / S3-compatible adapter        | `0.1.0` npm |
+| `@pegma/storage-blobs`         | Port, memory store, conformance suite | `0.2.0` npm |
+| `@pegma/storage-azure-blob`    | Azure Blob Storage adapter            | `0.2.0` npm |
+| `@pegma/storage-cloudflare-r2` | Cloudflare R2 adapter                 | `0.2.0` npm |
+| `@pegma/storage-s3`            | AWS S3 / S3-compatible adapter        | `0.2.0` npm |
 
 ## Constraint that shapes everything
 

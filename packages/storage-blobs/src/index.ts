@@ -45,6 +45,9 @@ export const MAX_CONTENT_TYPE_BYTES = 256;
 /** Content-type applied when a put omits one. */
 export const DEFAULT_CONTENT_TYPE = "application/octet-stream";
 
+/** Maximum UTF-8 byte length of a stored cache-control value. */
+export const MAX_CACHE_CONTROL_BYTES = 256;
+
 /** Published package name. Stable for smoke and release inventory checks. */
 export const storageBlobsPackageName = "@pegma/storage-blobs" as const;
 
@@ -88,6 +91,12 @@ export interface BlobObjectInfo {
   readonly key: string;
   readonly size: number;
   readonly contentType: string;
+  /**
+   * Cache-control header value stored at put time, or undefined when the put
+   * omitted one. Stored and returned verbatim; this package does not
+   * interpret it.
+   */
+  readonly cacheControl: string | undefined;
   readonly etag: string;
   readonly userMetadata: Readonly<Record<string, string>>;
 }
@@ -130,6 +139,14 @@ export interface PutOptions {
    */
   readonly contentType?: string;
   /**
+   * Cache-control header value to store with the object (for example
+   * `public, max-age=31536000, immutable`). No default; a replacing put
+   * without one clears any previously stored value. Stored because every
+   * first-class backend keeps it as native object state and serves it with
+   * the bytes; how responses are cached remains host policy.
+   */
+  readonly cacheControl?: string;
+  /**
    * Small string map stored with the object. Keys and values are constrained
    * so every first-class backend can round-trip them.
    */
@@ -170,7 +187,7 @@ export interface ListOptions {
   readonly cursor?: string;
 }
 
-/** One object in a list page. Content-type is not listed (backend intersection). */
+/** One object in a list page. Content-type and cache-control are not listed (backend intersection). */
 export interface BlobListEntry {
   readonly key: string;
   readonly size: number;
@@ -248,6 +265,7 @@ export interface MemoryBlobStoreOptions {
 interface StoredBlob {
   readonly bytes: Uint8Array;
   readonly contentType: string;
+  readonly cacheControl: string | undefined;
   readonly etag: string;
   readonly userMetadata: Readonly<Record<string, string>>;
 }
@@ -401,6 +419,24 @@ export function assertValidContentType(contentType: string): string {
     );
   }
   return contentType;
+}
+
+/** Validates and returns a portable cache-control string. */
+export function assertValidCacheControl(cacheControl: string): string {
+  if (typeof cacheControl !== "string" || cacheControl.length === 0) {
+    throw new BlobValidationError("Cache-control must be a non-empty string.");
+  }
+  // Must be portable as an HTTP Cache-Control header across first-class backends.
+  if (!isPrintableAscii(cacheControl)) {
+    throw new BlobValidationError("Cache-control must be printable ASCII.");
+  }
+  assertNoSurroundingWhitespace(cacheControl, "Cache-control");
+  if (utf8ByteLength(cacheControl) > MAX_CACHE_CONTROL_BYTES) {
+    throw new BlobValidationError(
+      `Cache-control exceeds ${MAX_CACHE_CONTROL_BYTES} UTF-8 bytes.`,
+    );
+  }
+  return cacheControl;
 }
 
 /**
@@ -640,6 +676,7 @@ function toObjectInfo(key: string, stored: StoredBlob): BlobObjectInfo {
     key,
     size: stored.bytes.byteLength,
     contentType: stored.contentType,
+    cacheControl: stored.cacheControl,
     etag: stored.etag,
     userMetadata: stored.userMetadata,
   };
@@ -693,6 +730,10 @@ export function createMemoryBlobStore(
       const contentType = assertValidContentType(
         putOptions?.contentType ?? DEFAULT_CONTENT_TYPE,
       );
+      const cacheControl =
+        putOptions?.cacheControl === undefined
+          ? undefined
+          : assertValidCacheControl(putOptions.cacheControl);
       const userMetadata = normalizeUserMetadata(putOptions?.userMetadata);
       const limitBytes = assertMaxBytes(putOptions?.maxBytes, maxObjectBytes);
 
@@ -732,6 +773,7 @@ export function createMemoryBlobStore(
       objects.set(key, {
         bytes,
         contentType,
+        cacheControl,
         etag,
         userMetadata,
       });

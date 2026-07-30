@@ -6,6 +6,7 @@ import {
   DEFAULT_CONTENT_TYPE,
   MAX_BLOB_KEY_BYTES,
   MAX_BLOB_KEY_SEGMENTS,
+  MAX_CACHE_CONTROL_BYTES,
   MAX_LIST_PAGE_SIZE,
   MAX_USER_METADATA_TOTAL_BYTES,
   type BlobStore,
@@ -744,6 +745,70 @@ export const conformanceCases: readonly ConformanceCase[] = [
     assert.deepEqual(await store.delete("gone/obj"), { ok: true });
     assert.equal(await store.head("gone/obj"), null);
     assert.equal(await store.get("gone/obj"), null);
+  }),
+
+  // --- Cache-control (0.2.0 port extension) ---
+
+  testCase(
+    "put stores cache-control and head/get return it verbatim",
+    async (store) => {
+      const cacheControl = "public, max-age=31536000, immutable";
+      const put = await store.put("cache/asset.png", textBytes("png-bytes"), {
+        contentType: "image/png",
+        cacheControl,
+      });
+      assert.equal(put.ok, true);
+
+      const head = await store.head("cache/asset.png");
+      assert.ok(head);
+      assert.equal(head.cacheControl, cacheControl);
+
+      const got = await store.get("cache/asset.png");
+      assert.ok(got);
+      assert.equal(got.cacheControl, cacheControl);
+    },
+  ),
+
+  testCase(
+    "head and get report undefined cache-control when a put omits one",
+    async (store) => {
+      await store.put("cache/plain", textBytes("x"));
+      const head = await store.head("cache/plain");
+      assert.ok(head);
+      assert.equal(head.cacheControl, undefined);
+      const got = await store.get("cache/plain");
+      assert.ok(got);
+      assert.equal(got.cacheControl, undefined);
+    },
+  ),
+
+  testCase(
+    "put replace clears cache-control when the replacing put omits it",
+    async (store) => {
+      await store.put("cache/replace", textBytes("v1"), {
+        cacheControl: "no-store",
+      });
+      await store.put("cache/replace", textBytes("v2"));
+      const head = await store.head("cache/replace");
+      assert.ok(head);
+      assert.equal(head.cacheControl, undefined);
+    },
+  ),
+
+  testCase("rejects illegal cache-control values", async (store) => {
+    const illegal = [
+      "",
+      " no-store ",
+      "max-age=\u20ac",
+      "v".repeat(MAX_CACHE_CONTROL_BYTES + 1),
+    ];
+    for (const cacheControl of illegal) {
+      await assert.rejects(
+        () => store.put("cache/bad", textBytes("x"), { cacheControl }),
+        (error: unknown) => error instanceof BlobValidationError,
+      );
+    }
+    assert.equal(await store.head("cache/bad"), null);
   }),
 ];
 
