@@ -5,7 +5,7 @@ import {
   dualStoreConformanceCases,
   sizeLimitConformanceCases,
 } from "@pegma/storage-blobs/conformance";
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { BLOB_PORT } from "../../../test/azurite.js";
 import { createAzureBlobStore } from "./index.js";
@@ -91,4 +91,34 @@ describe("createAzureBlobStore", () => {
       );
     });
   }
+
+  // Real client against Azurite; only the first createIfNotExists call is
+  // forced to fail, since the emulator cannot inject a one-shot fault itself.
+  it("retries container creation after a failed first attempt", async () => {
+    const container = serviceClient().getContainerClient(nextContainerName());
+    let createAttempts = 0;
+    const realCreate = container.createIfNotExists.bind(container);
+    container.createIfNotExists = async (createOptions) => {
+      createAttempts += 1;
+      if (createAttempts === 1) {
+        throw new Error("transient container create failure");
+      }
+      return realCreate(createOptions);
+    };
+
+    const store = createAzureBlobStore({
+      containerClient: container,
+      createContainerIfMissing: true,
+    });
+
+    await expect(store.head("some-key")).rejects.toThrow(
+      "transient container create failure",
+    );
+    await expect(store.head("some-key")).resolves.toBeNull();
+    expect(createAttempts).toBe(2);
+
+    // Success stays memoized: further operations do not re-create.
+    await expect(store.head("some-key")).resolves.toBeNull();
+    expect(createAttempts).toBe(2);
+  });
 });
