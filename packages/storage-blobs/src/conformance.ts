@@ -792,6 +792,9 @@ export const conformanceCases: readonly ConformanceCase[] = [
       const head = await store.head("cache/replace");
       assert.ok(head);
       assert.equal(head.cacheControl, undefined);
+      const got = await store.get("cache/replace");
+      assert.ok(got);
+      assert.equal(got.cacheControl, undefined);
     },
   ),
 
