@@ -216,9 +216,15 @@ describe("prepared manifest anchoring", () => {
       join(process.cwd(), ".github", "workflows", "publish.yml"),
       "utf8",
     );
-    const jobs = workflow.slice(workflow.indexOf("\njobs:\n"));
+    const jobsMarker = "\njobs:\n";
+    const jobsIndex = workflow.indexOf(jobsMarker);
+    expect(jobsIndex).toBeGreaterThanOrEqual(0);
+    const jobs = workflow.slice(jobsIndex + jobsMarker.length);
+    const prepareStart = jobs.indexOf("  prepare:");
     const publishStart = jobs.indexOf("\n  publish:");
-    const prepare = jobs.slice(jobs.indexOf("  prepare:"), publishStart);
+    expect(prepareStart).toBeGreaterThanOrEqual(0);
+    expect(publishStart).toBeGreaterThan(prepareStart);
+    const prepare = jobs.slice(prepareStart, publishStart);
     const publish = jobs.slice(publishStart);
     expect(prepare).toContain(
       "manifest-digest: ${{ steps.manifest.outputs.digest }}",

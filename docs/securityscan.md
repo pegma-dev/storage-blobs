@@ -106,11 +106,15 @@ authorized the caller. Attacker-relevant surfaces:
 
 ### [MEDIUM] Dev-only dependency chain (azurite) carries 12 known vulnerabilities
 
-✅ Resolved 2026-07-29 — added a gating `npm audit --omit=dev --audit-level=low`
-step to CI so any _runtime_ advisory fails the build; the dev-only azurite chain
-has no upstream fix (3.36.0 is the latest release and npm's proposed 3.33.0 is a
-downgrade that keeps the same vulnerable `rimraf` and pulls _older_ `uuid`
-and `@azure/ms-rest-js`), so it stays a tracked non-gating item.
+✅ Resolved 2026-07-29 — resolved as **contained, not eliminated**. The 12
+advisories are still present in the dev-only azurite chain and there is no
+upstream fix to take: 3.36.0 is the latest release, and npm's proposed 3.33.0 is
+a downgrade that keeps the same vulnerable `rimraf` and pulls _older_ `uuid` and
+`@azure/ms-rest-js`. What changed is the boundary: CI now gates on
+`npm audit --omit=dev --audit-level=low`, so shipped dependencies are enforced
+clean (currently 0 advisories) and any future _runtime_ advisory fails the build,
+while the dev-chain advisories remain a tracked, non-gating item to re-check when
+azurite next releases.
 
 - **Location:** root `package.json:28` (`"azurite": "^3.36.0"`); full chains in
   `npm audit` output (appendix below).
@@ -166,12 +170,18 @@ is required and verified with `timingSafeEqual` before the manifest is parsed.
 
 ## Phase 3 — Summary
 
-| Severity | Count |
-| -------- | ----- |
-| Critical | 0     |
-| High     | 0     |
-| Medium   | 1     |
-| Low      | 1     |
+Counts below are **as originally scanned on 2026-07-29**, kept as the scan
+record. Both findings were subsequently dispositioned — see the per-finding
+resolution notes above: the Low (artifact handoff) is fixed outright, and the
+Medium (azurite dev chain) is contained by the runtime audit gate with the
+dev-only advisories still open upstream.
+
+| Severity | Count | Current state                         |
+| -------- | ----- | ------------------------------------- |
+| Critical | 0     | —                                     |
+| High     | 0     | —                                     |
+| Medium   | 1     | Contained (dev-only, no upstream fix) |
+| Low      | 1     | Fixed                                 |
 
 | Layer                                    | Status                                                                                                                                          |
 | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
