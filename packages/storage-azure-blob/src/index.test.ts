@@ -1,4 +1,4 @@
-import { BlobServiceClient, type ContainerClient } from "@azure/storage-blob";
+import { BlobServiceClient } from "@azure/storage-blob";
 import {
   concurrentConformanceCases,
   conformanceCases,
@@ -92,32 +92,22 @@ describe("createAzureBlobStore", () => {
     });
   }
 
-  // Azurite cannot be made to fail createIfNotExists exactly once, so this
-  // fault-injection case uses a stub client instead of the emulator.
+  // Real client against Azurite; only the first createIfNotExists call is
+  // forced to fail, since the emulator cannot inject a one-shot fault itself.
   it("retries container creation after a failed first attempt", async () => {
+    const container = serviceClient().getContainerClient(nextContainerName());
     let createAttempts = 0;
-    const notFound = () =>
-      Object.assign(new Error("BlobNotFound"), { statusCode: 404 });
-    const containerClient = {
-      containerName: "retry-container",
-      accountName: ACCOUNT,
-      url: `http://127.0.0.1:${BLOB_PORT}/${ACCOUNT}/retry-container`,
-      createIfNotExists: async () => {
-        createAttempts += 1;
-        if (createAttempts === 1) {
-          throw new Error("transient container create failure");
-        }
-        return { succeeded: true };
-      },
-      getBlockBlobClient: () => ({
-        getProperties: async () => {
-          throw notFound();
-        },
-      }),
-    } as unknown as ContainerClient;
+    const realCreate = container.createIfNotExists.bind(container);
+    container.createIfNotExists = async (createOptions) => {
+      createAttempts += 1;
+      if (createAttempts === 1) {
+        throw new Error("transient container create failure");
+      }
+      return realCreate(createOptions);
+    };
 
     const store = createAzureBlobStore({
-      containerClient,
+      containerClient: container,
       createContainerIfMissing: true,
     });
 
