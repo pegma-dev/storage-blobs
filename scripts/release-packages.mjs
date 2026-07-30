@@ -92,6 +92,32 @@ function hashTarball(bytes) {
   };
 }
 
+export function digestManifest(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+// The prepared manifest travels to the publish job inside the same artifact as
+// the tarballs it describes, so a self-consistent replacement of both would
+// satisfy every internal check. The preparation job therefore reports the
+// manifest digest as a job output, which crosses the boundary through run
+// metadata instead of the artifact, and publication refuses to proceed without
+// a match.
+export function verifyManifestDigest(bytes, expectedDigest) {
+  if (expectedDigest === undefined || expectedDigest === "") {
+    fail("an expected prepared manifest digest is required");
+  }
+  if (!/^[0-9a-f]{64}$/u.test(expectedDigest)) {
+    fail("the expected prepared manifest digest must be SHA-256 hexadecimal");
+  }
+  const actualDigest = digestManifest(bytes);
+  if (!safeEqual(actualDigest, expectedDigest)) {
+    fail(
+      "the prepared package manifest does not match the digest recorded by the preparation job",
+    );
+  }
+  return actualDigest;
+}
+
 function exportTargets(value) {
   if (typeof value === "string") return [value];
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
@@ -449,8 +475,16 @@ export async function prepareRelease(options = {}) {
     packages: preparedPackages,
   };
   const manifestPath = join(output, "package-manifest.json");
-  await writeFile(manifestPath, `${JSON.stringify(prepared, null, 2)}\n`);
-  return { manifestPath, manifest: prepared };
+  const manifestBytes = Buffer.from(
+    `${JSON.stringify(prepared, null, 2)}\n`,
+    "utf8",
+  );
+  await writeFile(manifestPath, manifestBytes);
+  return {
+    manifestPath,
+    manifest: prepared,
+    manifestDigest: digestManifest(manifestBytes),
+  };
 }
 
 function queryRegistryIntegrity(name, version) {
@@ -506,8 +540,10 @@ function confirmRegistryIntegrity(record) {
   );
 }
 
-async function verifyPreparedManifest(path) {
-  const prepared = await readJson(path);
+async function verifyPreparedManifest(path, expectedManifestDigest) {
+  const manifestBytes = await readFile(path);
+  verifyManifestDigest(manifestBytes, expectedManifestDigest);
+  const prepared = JSON.parse(manifestBytes.toString("utf8"));
   const records = prepared.packages;
   if (
     prepared.schemaVersion !== 2 ||
@@ -568,7 +604,10 @@ export async function publishPreparedRelease(options = {}) {
   }
   requireTrustedPublishingNpm();
   const path = resolve(options.manifest ?? ".release/package-manifest.json");
-  const prepared = await verifyPreparedManifest(path);
+  const prepared = await verifyPreparedManifest(
+    path,
+    options.expectedManifestDigest ?? process.env.RELEASE_MANIFEST_DIGEST,
+  );
   const releaseTag = options.releaseTag ?? process.env.RELEASE_TAG;
   const expectedCommit =
     options.expectedReleaseCommit ?? process.env.RELEASE_COMMIT;
@@ -634,7 +673,9 @@ export function parseArguments(arguments_) {
             ? "manifest"
             : argument === "--expected-release-commit"
               ? "expectedReleaseCommit"
-              : null;
+              : argument === "--expected-manifest-digest"
+                ? "expectedManifestDigest"
+                : null;
     if (key === null || arguments_[index + 1] === undefined) {
       fail(`unknown or incomplete argument: ${argument}`);
     }
@@ -657,8 +698,9 @@ async function main() {
     return;
   }
   if (command === "pack") {
-    const { manifestPath } = await prepareRelease(options);
+    const { manifestPath, manifestDigest } = await prepareRelease(options);
     process.stdout.write(`Prepared release package at ${manifestPath}.\n`);
+    process.stdout.write(`Prepared manifest SHA-256 ${manifestDigest}.\n`);
     return;
   }
   if (command === "publish") {
