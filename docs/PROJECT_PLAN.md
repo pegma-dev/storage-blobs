@@ -2,9 +2,9 @@
 
 ## Status
 
-**Stage:** Phase 6 complete. `@pegma/storage-blobs@0.1.0` and the Azure Blob,
-Cloudflare R2, and S3 adapters are on npm with trusted-publisher provenance
-from the signed `v0.1.0` release.
+**Stage:** Phase 6 complete. `@pegma/storage-blobs@0.1.2` and the Azure Blob,
+Cloudflare R2, and S3 adapters are on npm at the same version with
+trusted-publisher provenance from signed annotated release tags.
 
 **Package (first release):** `@pegma/storage-blobs@0.1.0` (with adapters
 `@pegma/storage-azure-blob`, `@pegma/storage-cloudflare-r2`,
