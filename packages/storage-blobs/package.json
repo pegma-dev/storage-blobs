@@ -1,6 +1,6 @@
 {
   "name": "@pegma/storage-blobs",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Provider-neutral object (blob) storage: opaque keys, streaming put/get, conditionals, and a conformance suite.",
   "license": "MIT",
   "type": "module",

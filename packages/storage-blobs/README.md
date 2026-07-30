@@ -8,13 +8,13 @@ components: opaque keys, streaming put/get, conditional writes, bounded prefix
 listing, and a conformance suite that every adapter must pass.
 
 > [!IMPORTANT]
-> Early `0.x` (`0.1.0` on npm). Pin exact versions; the public API is not frozen.
+> Early `0.x` (`0.2.0` on npm). Pin exact versions; the public API is not frozen.
 > See [PROJECT_PLAN.md](../../docs/PROJECT_PLAN.md).
 
 ## Install
 
 ```sh
-npm install @pegma/storage-blobs@0.1.0
+npm install @pegma/storage-blobs@0.2.0
 ```
 
 ## Server-side composition
@@ -34,6 +34,7 @@ const blobs: BlobStore = createMemoryBlobStore({
 const key = "support-desk/attachments/01JEXAMPLE";
 const put = await blobs.put(key, requestBodyStream, {
   contentType: "application/pdf",
+  cacheControl: "public, max-age=31536000, immutable", // optional
   ifNoneMatch: "*", // create-only
   userMetadata: { ticket_id: "t_123" },
 });
@@ -81,6 +82,16 @@ do {
 ```
 
 Listing is not a snapshot. Always delete with the etag you observed.
+
+### Cache-control
+
+`put` accepts an optional `cacheControl` string stored with the object and
+returned by `head`/`get` (`undefined` when the put omitted it; a replacing put
+without one clears it). It is in the port because every first-class backend
+keeps Cache-Control as native object state served with the bytes — unlike
+signed URLs or lifecycle rules, which stay out. The store never interprets the
+value; whether a host response honours or overrides it is host policy, like
+`Content-Disposition`.
 
 ## Conformance (v1 specification)
 

@@ -15,6 +15,7 @@ import {
   DEFAULT_MAX_OBJECT_BYTES,
   assertValidBlobKey,
   assertValidBlobPrefix,
+  assertValidCacheControl,
   assertValidContentType,
   normalizeUserMetadata,
   type BlobListPage,
@@ -297,6 +298,7 @@ function toObjectInfo(
   props: {
     contentLength: number | undefined;
     contentType: string | undefined;
+    cacheControl: string | undefined;
     etag: string | undefined;
     metadata: Record<string, string> | undefined;
   },
@@ -305,6 +307,11 @@ function toObjectInfo(
     key,
     size: props.contentLength ?? 0,
     contentType: props.contentType ?? DEFAULT_CONTENT_TYPE,
+    // Some S3-compatible servers report a cleared cache-control as "".
+    cacheControl:
+      props.cacheControl === undefined || props.cacheControl.length === 0
+        ? undefined
+        : props.cacheControl,
     etag: requireEtag(props.etag, key),
     userMetadata: metadataFromS3(props.metadata),
   };
@@ -397,6 +404,7 @@ export function createCloudflareR2BlobStore(
       return toObjectInfo(key, {
         contentLength: response.ContentLength,
         contentType: response.ContentType,
+        cacheControl: response.CacheControl,
         etag: response.ETag,
         metadata: response.Metadata,
       });
@@ -431,6 +439,10 @@ export function createCloudflareR2BlobStore(
       const contentType = assertValidContentType(
         putOptions?.contentType ?? DEFAULT_CONTENT_TYPE,
       );
+      const cacheControl =
+        putOptions?.cacheControl === undefined
+          ? undefined
+          : assertValidCacheControl(putOptions.cacheControl);
       const userMetadata = normalizeUserMetadata(putOptions?.userMetadata);
       const limitBytes = assertMaxBytes(putOptions?.maxBytes, maxObjectBytes);
       const bytes = await readBody(body, limitBytes);
@@ -440,6 +452,7 @@ export function createCloudflareR2BlobStore(
         Key: string;
         Body: Uint8Array;
         ContentType: string;
+        CacheControl?: string;
         Metadata?: Record<string, string>;
         IfNoneMatch?: string;
         IfMatch?: string;
@@ -449,6 +462,9 @@ export function createCloudflareR2BlobStore(
         Body: bytes,
         ContentType: contentType,
       };
+      if (cacheControl !== undefined) {
+        input.CacheControl = cacheControl;
+      }
       if (Object.keys(userMetadata).length > 0) {
         input.Metadata = { ...userMetadata };
       }
@@ -575,6 +591,7 @@ export function createCloudflareR2BlobStore(
         const info = toObjectInfo(key, {
           contentLength: response.ContentLength,
           contentType: response.ContentType,
+          cacheControl: response.CacheControl,
           etag: response.ETag,
           metadata: response.Metadata,
         });
