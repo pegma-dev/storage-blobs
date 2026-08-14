@@ -277,14 +277,10 @@ async function validateOnePackage(root, definition, lockfile) {
   }
   await stat(join(packageDirectory, "README.md"));
   await stat(join(packageDirectory, "LICENSE"));
-  assertPnpmLockfileSynchronized(
-    lockfile,
-    `packages/${definition.directory}`,
-    {
-      ...manifest.dependencies,
-      ...manifest.peerDependencies,
-    },
-  );
+  assertPnpmLockfileSynchronized(lockfile, `packages/${definition.directory}`, {
+    ...manifest.dependencies,
+    ...manifest.peerDependencies,
+  });
   return { definition, packageDirectory, manifest };
 }
 
