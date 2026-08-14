@@ -280,7 +280,10 @@ async function validateOnePackage(root, definition, lockfile) {
   assertPnpmLockfileSynchronized(
     lockfile,
     `packages/${definition.directory}`,
-    manifest.dependencies ?? {},
+    {
+      ...manifest.dependencies,
+      ...manifest.peerDependencies,
+    },
   );
   return { definition, packageDirectory, manifest };
 }
@@ -300,26 +303,143 @@ export function lockfileImporterBlock(lockfile, importer) {
   return block.join("\n");
 }
 
+export function unquoteYamlScalar(value) {
+  if (typeof value !== "string" || value.length < 2) {
+    return value;
+  }
+  if (value.startsWith("'") && value.endsWith("'")) {
+    return value.slice(1, -1).replaceAll("''", "'");
+  }
+  if (value.startsWith('"') && value.endsWith('"')) {
+    return value.slice(1, -1).replaceAll(/\\(["\\/bfnrt])/gu, (_match, ch) => {
+      if (ch === "b") {
+        return "\b";
+      }
+      if (ch === "f") {
+        return "\f";
+      }
+      if (ch === "n") {
+        return "\n";
+      }
+      if (ch === "r") {
+        return "\r";
+      }
+      if (ch === "t") {
+        return "\t";
+      }
+      return ch;
+    });
+  }
+  return value;
+}
+
 export function parseImporterDependencyPins(block) {
   const pins = {};
   const pattern =
-    /^ {6}('[^']+'|[A-Za-z0-9@/._-]+):\n {8}specifier: (\S+)\n {8}version: (\S+)$/gmu;
+    /^ {6}('[^']+'|"[^"]+"|[A-Za-z0-9@/._-]+):\n {8}specifier: (.+)\n {8}version: (.+)$/gmu;
   for (const match of block.matchAll(pattern)) {
-    let name = match[1];
-    if (name.startsWith("'") && name.endsWith("'")) {
-      name = name.slice(1, -1);
-    }
-    pins[name] = { specifier: match[2], version: match[3] };
+    const name = unquoteYamlScalar(match[1]);
+    pins[name] = {
+      specifier: unquoteYamlScalar(match[2]),
+      version: unquoteYamlScalar(match[3]),
+    };
   }
   return pins;
 }
 
-function resolvedVersionMatchesPin(resolved, specifier) {
-  if (resolved.startsWith("link:")) return true;
-  if (STABLE_SEMVER.test(specifier)) {
-    return resolved === specifier || resolved.startsWith(`${specifier}(`);
+function lockResolvedVersion(version) {
+  if (version.startsWith("link:")) {
+    return version;
   }
-  return resolved.length > 0;
+  return /^(\S+?)(?:\(|$)/u.exec(version)?.[1] ?? version;
+}
+
+function parseStableSemver(version) {
+  const match = STABLE_SEMVER.exec(version);
+  if (match === null) {
+    return null;
+  }
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+  };
+}
+
+function compareStableSemver(left, right) {
+  return (
+    left.major - right.major ||
+    left.minor - right.minor ||
+    left.patch - right.patch
+  );
+}
+
+/**
+ * Exact pins must match the resolved version. A range such as `^1.2.0` may
+ * resolve to `1.2.3`. Workspace `link:` entries are accepted as-is.
+ */
+export function resolvedVersionSatisfies(specifier, resolvedVersion) {
+  const resolved = lockResolvedVersion(resolvedVersion);
+  if (resolved.startsWith("link:")) {
+    return true;
+  }
+  if (resolved === specifier) {
+    return true;
+  }
+  if (STABLE_SEMVER.test(specifier)) {
+    return false;
+  }
+  const parsedResolved = parseStableSemver(resolved);
+  if (parsedResolved === null) {
+    return false;
+  }
+  if (specifier === "*" || specifier === "x" || specifier === "X") {
+    return true;
+  }
+  const majorOnly = /^(0|[1-9]\d*)$/u.exec(specifier);
+  if (majorOnly !== null) {
+    return parsedResolved.major === Number(majorOnly[1]);
+  }
+  const minorOnly = /^(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.exec(specifier);
+  if (minorOnly !== null) {
+    return (
+      parsedResolved.major === Number(minorOnly[1]) &&
+      parsedResolved.minor === Number(minorOnly[2])
+    );
+  }
+  const caret = /^\^((0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*))$/u.exec(
+    specifier,
+  );
+  if (caret !== null) {
+    const floor = parseStableSemver(caret[1]);
+    if (floor === null || compareStableSemver(parsedResolved, floor) < 0) {
+      return false;
+    }
+    if (floor.major > 0) {
+      return parsedResolved.major === floor.major;
+    }
+    if (floor.minor > 0) {
+      return parsedResolved.major === 0 && parsedResolved.minor === floor.minor;
+    }
+    return (
+      parsedResolved.major === 0 &&
+      parsedResolved.minor === 0 &&
+      parsedResolved.patch === floor.patch
+    );
+  }
+  const tilde = /^~((0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*))$/u.exec(
+    specifier,
+  );
+  if (tilde !== null) {
+    const floor = parseStableSemver(tilde[1]);
+    return (
+      floor !== null &&
+      compareStableSemver(parsedResolved, floor) >= 0 &&
+      parsedResolved.major === floor.major &&
+      parsedResolved.minor === floor.minor
+    );
+  }
+  return resolved === specifier;
 }
 
 export function assertPnpmLockfileSynchronized(
@@ -340,7 +460,7 @@ export function assertPnpmLockfileSynchronized(
     if (
       entry === undefined ||
       entry.specifier !== specifier ||
-      !resolvedVersionMatchesPin(entry.version, specifier)
+      !resolvedVersionSatisfies(specifier, entry.version)
     ) {
       fail(
         `${name}@${specifier} is not synchronized with its own pnpm-lock.yaml entry`,

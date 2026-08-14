@@ -11,6 +11,8 @@ import {
   digestManifest,
   parseArguments,
   resolveNpmCli,
+  resolvedVersionSatisfies,
+  unquoteYamlScalar,
   validateReleaseTag,
   validateRepository,
   verifyManifestDigest,
@@ -123,6 +125,79 @@ importers:
         },
       ),
     ).toThrow("@pegma/storage-blobs@0.2.0");
+    const exactPin = lockfile.replace(
+      "        specifier: ^12.29.1\n        version: 12.33.0",
+      "        specifier: 12.29.1\n        version: 12.33.0",
+    );
+    expect(() =>
+      assertPnpmLockfileSynchronized(exactPin, "packages/storage-azure-blob", {
+        "@azure/storage-blob": "12.29.1",
+        "@pegma/storage-blobs": "0.2.0",
+      }),
+    ).toThrow("@azure/storage-blob@12.29.1");
+  });
+
+  it("accepts a resolved version that satisfies a semver range", () => {
+    expect(resolvedVersionSatisfies("^1.2.0", "1.2.3")).toBe(true);
+    expect(resolvedVersionSatisfies("^1.2.0", "1.2.0")).toBe(true);
+    expect(resolvedVersionSatisfies("^1.2.0", "2.0.0")).toBe(false);
+    expect(resolvedVersionSatisfies("1.2.0", "1.2.0")).toBe(true);
+    expect(resolvedVersionSatisfies("1.2.0", "1.2.3")).toBe(false);
+    expect(resolvedVersionSatisfies("1.2.0", "1.2.0(@foo@1.0.0)")).toBe(true);
+  });
+
+  it("unquotes YAML scalars before comparing lockfile pins", () => {
+    expect(unquoteYamlScalar("'*'")).toBe("*");
+    expect(unquoteYamlScalar("'1'")).toBe("1");
+    expect(unquoteYamlScalar('"1"')).toBe("1");
+    const lockfile = `lockfileVersion: '9.0'
+
+importers:
+
+  packages/storage-blobs:
+    dependencies:
+      demo:
+        specifier: '*'
+        version: 1.2.3
+      numbered:
+        specifier: '1'
+        version: '1.0.0'
+`;
+    expect(() =>
+      assertPnpmLockfileSynchronized(lockfile, "packages/storage-blobs", {
+        demo: "*",
+        numbered: "1",
+      }),
+    ).not.toThrow();
+  });
+
+  it("includes peerDependencies in the lockfile pin check", () => {
+    const lockfile = `lockfileVersion: '9.0'
+
+importers:
+
+  packages/storage-blobs:
+    dependencies:
+      '@azure/storage-blob':
+        specifier: ^12.29.1
+        version: 12.33.0
+    peerDependencies:
+      '@pegma/spine':
+        specifier: ^0.1.0
+        version: 0.1.2
+`;
+    expect(() =>
+      assertPnpmLockfileSynchronized(lockfile, "packages/storage-blobs", {
+        "@azure/storage-blob": "^12.29.1",
+        "@pegma/spine": "^0.1.0",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertPnpmLockfileSynchronized(lockfile, "packages/storage-blobs", {
+        "@azure/storage-blob": "^12.29.1",
+        "@pegma/spine": "^0.2.0",
+      }),
+    ).toThrow("@pegma/spine@^0.2.0");
   });
 
   it("requires the release tag to match a public package version", async () => {
