@@ -18,10 +18,10 @@ Thank you for helping improve Storage Blobs.
 Storage Blobs requires Node.js 22 or newer.
 
 ```sh
-npm ci
-npm run check
-npm test
-npm run format:check
+pnpm install
+pnpm run check
+pnpm test
+pnpm run format:check
 ```
 
 ## Pull requests

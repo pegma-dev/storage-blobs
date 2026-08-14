@@ -5,7 +5,7 @@
   "description": "Provider-neutral object (blob) storage for Pegma components: a narrow port, conformance suite, and thin cloud adapters.",
   "license": "MIT",
   "type": "module",
-  "packageManager": "npm@11.18.0",
+  "packageManager": "pnpm@10.34.5",
   "engines": {
     "node": ">=22"
   },
@@ -21,7 +21,7 @@
     "release:check": "node scripts/release-packages.mjs check",
     "release:pack": "node scripts/release-packages.mjs pack",
     "release:publish": "node scripts/release-packages.mjs publish",
-    "test": "npm run build && vitest run"
+    "test": "pnpm run build && vitest run"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

@@ -55,10 +55,10 @@ marketing features.
 Requires Node.js 22 or newer.
 
 ```sh
-npm ci
-npm run format:check
-npm run check
-npm test
+pnpm install
+pnpm run format:check
+pnpm run check
+pnpm test
 ```
 
 ## License

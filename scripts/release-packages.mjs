@@ -14,7 +14,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPOSITORY_URL = "git+https://github.com/pegma-dev/storage-blobs.git";
-const REVIEWED_NPM_VERSION = "11.18.0";
+const REVIEWED_PNPM_VERSION = "10.34.5";
 const STABLE_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 
 export const RELEASE_PACKAGES = [
@@ -72,13 +72,20 @@ function run(command, arguments_, options = {}) {
 }
 
 function runNpm(arguments_, options = {}) {
-  const npmExecPath = process.env.npm_execpath;
-  return npmExecPath === undefined
-    ? run(process.platform === "win32" ? "npm.cmd" : "npm", arguments_, {
-        ...options,
-        shell: process.platform === "win32",
-      })
-    : run(process.execPath, [npmExecPath, ...arguments_], options);
+  // Always invoke npm, never npm_execpath. This script is launched via pnpm,
+  // and npm_execpath would then be pnpm — which does not accept npm pack,
+  // view, or trusted-publish arguments.
+  return run(process.platform === "win32" ? "npm.cmd" : "npm", arguments_, {
+    ...options,
+    shell: process.platform === "win32",
+  });
+}
+
+function runPnpm(arguments_, options = {}) {
+  return run(process.platform === "win32" ? "pnpm.cmd" : "pnpm", arguments_, {
+    ...options,
+    shell: process.platform === "win32",
+  });
 }
 
 function gitCommand() {
@@ -188,7 +195,6 @@ export function validateReleaseTag(options = {}) {
 async function validateOnePackage(root, definition, lockfile) {
   const packageDirectory = join(root, "packages", definition.directory);
   const manifest = await readJson(join(packageDirectory, "package.json"));
-  const lockEntry = lockfile.packages?.[`packages/${definition.directory}`];
 
   if (
     manifest.name !== definition.name ||
@@ -227,24 +233,67 @@ async function validateOnePackage(root, definition, lockfile) {
   }
   await stat(join(packageDirectory, "README.md"));
   await stat(join(packageDirectory, "LICENSE"));
-  if (lockEntry?.version !== manifest.version) {
-    fail(
-      `${definition.name} version is not synchronized with package-lock.json`,
-    );
+  if (!lockfile.importers.has(`packages/${definition.directory}`)) {
+    fail(`${definition.name} is missing from pnpm-lock.yaml`);
   }
   return { definition, packageDirectory, manifest };
+}
+
+function parsePnpmLockfileImporters(text) {
+  const importers = new Set();
+  const specifiers = new Map();
+  const lines = text.split("\n");
+  let inImporters = false;
+  let currentImporter = null;
+  let currentDependency = null;
+
+  for (const line of lines) {
+    if (!inImporters) {
+      if (line === "importers:") inImporters = true;
+      continue;
+    }
+    if (line.length > 0 && !line.startsWith(" ") && !line.startsWith("\t")) {
+      break;
+    }
+    const importerMatch = /^ {2}(\.[^:]*|packages\/[^:]+):/.exec(line);
+    if (importerMatch !== null) {
+      currentImporter = importerMatch[1];
+      currentDependency = null;
+      importers.add(currentImporter);
+      specifiers.set(currentImporter, new Map());
+      continue;
+    }
+    const dependencyMatch = /^ {6}('([^']+)'|([^:]+)):$/.exec(line);
+    if (dependencyMatch !== null && currentImporter !== null) {
+      currentDependency = dependencyMatch[2] ?? dependencyMatch[3];
+      continue;
+    }
+    const specifierMatch = /^ {8}specifier: (.+)$/.exec(line);
+    if (
+      specifierMatch !== null &&
+      currentImporter !== null &&
+      currentDependency !== null
+    ) {
+      specifiers.get(currentImporter).set(currentDependency, specifierMatch[1]);
+      currentDependency = null;
+    }
+  }
+
+  return { importers, specifiers };
 }
 
 export async function validateRepository(options = {}) {
   const root = resolve(options.root ?? defaultRoot());
   const rootManifest = await readJson(join(root, "package.json"));
-  const lockfile = await readJson(join(root, "package-lock.json"));
+  const lockfile = parsePnpmLockfileImporters(
+    await readFile(join(root, "pnpm-lock.yaml"), "utf8"),
+  );
 
   if (
     rootManifest.private !== true ||
-    rootManifest.packageManager !== `npm@${REVIEWED_NPM_VERSION}`
+    rootManifest.packageManager !== `pnpm@${REVIEWED_PNPM_VERSION}`
   ) {
-    fail(`the private root must pin npm@${REVIEWED_NPM_VERSION}`);
+    fail(`the private root must pin pnpm@${REVIEWED_PNPM_VERSION}`);
   }
 
   const packages = [];
@@ -268,6 +317,13 @@ export async function validateRepository(options = {}) {
       if (dependencies[definition.name] !== sharedVersion) {
         fail(
           `${entry.manifest.name} must depend on ${definition.name}@${sharedVersion} exactly`,
+        );
+      }
+      const importer = `packages/${entry.definition.directory}`;
+      const locked = lockfile.specifiers.get(importer)?.get(definition.name);
+      if (locked !== sharedVersion) {
+        fail(
+          `${entry.manifest.name} lockfile specifier for ${definition.name} must be ${sharedVersion}`,
         );
       }
     }
@@ -417,7 +473,7 @@ export async function prepareRelease(options = {}) {
     fail(`release output directory must be empty: ${output}`);
   }
 
-  runNpm(["run", "build"], { cwd: root });
+  runPnpm(["run", "build"], { cwd: root });
 
   // Pack every package before smoke tests so adapters can install sibling
   // tarballs instead of fetching unpublished versions from the registry.
