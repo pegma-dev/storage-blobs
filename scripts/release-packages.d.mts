@@ -52,6 +52,13 @@ export function parseImporterDependencyPins(block: string): {
   };
 };
 
+export function unquoteYamlScalar(value: string): string;
+
+export function resolvedVersionSatisfies(
+  specifier: string,
+  resolvedVersion: string,
+): boolean;
+
 export function assertPnpmLockfileSynchronized(
   lockfile: string,
   importer: string,
