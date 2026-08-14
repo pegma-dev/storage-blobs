@@ -5,9 +5,12 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   RELEASE_PACKAGES,
+  REVIEWED_PNPM,
+  assertPnpmLockfileSynchronized,
   decidePublication,
   digestManifest,
   parseArguments,
+  resolveNpmCli,
   validateReleaseTag,
   validateRepository,
   verifyManifestDigest,
@@ -58,6 +61,68 @@ describe("release package metadata", () => {
 
   it("validates package manifests and the lockfile together", async () => {
     await expect(validateRepository()).resolves.toBeDefined();
+    const rootManifest = JSON.parse(
+      readFileSync(join(process.cwd(), "package.json"), "utf8"),
+    ) as { packageManager: string };
+    expect(rootManifest.packageManager).toBe(`pnpm@${REVIEWED_PNPM.version}`);
+  });
+
+  it("never treats pnpm as the npm CLI", () => {
+    const previous = process.env.npm_execpath;
+    process.env.npm_execpath = "/tmp/corepack/v1/pnpm/10.34.5/bin/pnpm.cjs";
+    try {
+      const cli = resolveNpmCli();
+      expect(cli).toMatch(/npm-cli\.js$/u);
+      expect(cli).not.toMatch(/pnpm/iu);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.npm_execpath;
+      } else {
+        process.env.npm_execpath = previous;
+      }
+    }
+  });
+
+  it("matches each lockfile dependency to its own specifier and version", () => {
+    const lockfile = `lockfileVersion: '9.0'
+
+importers:
+
+  packages/storage-azure-blob:
+    dependencies:
+      '@azure/storage-blob':
+        specifier: ^12.29.1
+        version: 12.33.0
+      '@pegma/storage-blobs':
+        specifier: 0.2.0
+        version: link:../storage-blobs
+`;
+    expect(() =>
+      assertPnpmLockfileSynchronized(lockfile, "packages/storage-azure-blob", {
+        "@azure/storage-blob": "^12.29.1",
+        "@pegma/storage-blobs": "0.2.0",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertPnpmLockfileSynchronized(lockfile, "packages/storage-azure-blob", {
+        "@azure/storage-blob": "^12.29.1",
+        "@pegma/storage-blobs": "0.3.0",
+      }),
+    ).toThrow("@pegma/storage-blobs@0.3.0");
+    const swappedVersion = lockfile.replace(
+      "        version: link:../storage-blobs",
+      "        version: 999.0.0",
+    );
+    expect(() =>
+      assertPnpmLockfileSynchronized(
+        swappedVersion,
+        "packages/storage-azure-blob",
+        {
+          "@azure/storage-blob": "^12.29.1",
+          "@pegma/storage-blobs": "0.2.0",
+        },
+      ),
+    ).toThrow("@pegma/storage-blobs@0.2.0");
   });
 
   it("requires the release tag to match a public package version", async () => {
@@ -173,7 +238,9 @@ describe("release source authentication", () => {
     expect(publish).not.toContain("pnpm install");
     expect(publish).not.toContain("npm ci");
     expect(publish).not.toContain("npm install");
-    expect(publish).toContain("pnpm run release:publish");
+    expect(publish).not.toContain("pnpm");
+    expect(publish).not.toContain("corepack");
+    expect(publish).toContain("node scripts/release-packages.mjs publish");
     expect(workflow).not.toContain("workflow_dispatch");
     expect(workflow).toContain("retention-days: 30");
   });

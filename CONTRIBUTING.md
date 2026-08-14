@@ -18,6 +18,7 @@ Thank you for helping improve Storage Blobs.
 Storage Blobs requires Node.js 22 or newer.
 
 ```sh
+corepack enable
 pnpm install
 pnpm run check
 pnpm test

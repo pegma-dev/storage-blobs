@@ -55,6 +55,7 @@ marketing features.
 Requires Node.js 22 or newer.
 
 ```sh
+corepack enable
 pnpm install
 pnpm run format:check
 pnpm run check

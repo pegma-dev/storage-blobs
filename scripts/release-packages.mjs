@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash, timingSafeEqual } from "node:crypto";
+import { existsSync } from "node:fs";
 import {
   mkdtemp,
   mkdir,
@@ -16,6 +17,11 @@ import { fileURLToPath } from "node:url";
 const REPOSITORY_URL = "git+https://github.com/pegma-dev/storage-blobs.git";
 const REVIEWED_PNPM_VERSION = "10.34.5";
 const STABLE_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
+
+/** Workspace package manager pinned in package.json via Corepack. */
+export const REVIEWED_PNPM = {
+  version: REVIEWED_PNPM_VERSION,
+};
 
 export const RELEASE_PACKAGES = [
   {
@@ -71,14 +77,52 @@ function run(command, arguments_, options = {}) {
   return result;
 }
 
+function isNpmCliPath(execPath) {
+  // `pnpm run` sets npm_execpath to .../pnpm.cjs. Never treat that, or an
+  // npm-cli.js nested under a pnpm install, as the reviewed npm CLI.
+  if (/pnpm/i.test(execPath)) return false;
+  return basename(execPath).toLowerCase() === "npm-cli.js";
+}
+
+function npmCliBeside(nodeOrBinDirectory) {
+  return [
+    join(
+      nodeOrBinDirectory,
+      "..",
+      "lib",
+      "node_modules",
+      "npm",
+      "bin",
+      "npm-cli.js",
+    ),
+    join(nodeOrBinDirectory, "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+    join(nodeOrBinDirectory, "node_modules", "npm", "bin", "npm-cli.js"),
+  ];
+}
+
+export function resolveNpmCli() {
+  const execPath = process.env.npm_execpath;
+  if (execPath !== undefined && isNpmCliPath(execPath)) {
+    return execPath;
+  }
+  // `pnpm run` sets npm_execpath to pnpm. Pack, publish, registry view, and
+  // the trusted-publishing version gate still use a real npm CLI.
+  const candidates = npmCliBeside(dirname(process.execPath));
+  const pathEnv = process.env.PATH ?? "";
+  const delimiter = process.platform === "win32" ? ";" : ":";
+  for (const directory of pathEnv.split(delimiter)) {
+    if (directory !== "") candidates.push(...npmCliBeside(directory));
+  }
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  fail(
+    "could not resolve the npm CLI used to pack and publish; Node's bundled npm is required",
+  );
+}
+
 function runNpm(arguments_, options = {}) {
-  // Always invoke npm, never npm_execpath. This script is launched via pnpm,
-  // and npm_execpath would then be pnpm — which does not accept npm pack,
-  // view, or trusted-publish arguments.
-  return run(process.platform === "win32" ? "npm.cmd" : "npm", arguments_, {
-    ...options,
-    shell: process.platform === "win32",
-  });
+  return run(process.execPath, [resolveNpmCli(), ...arguments_], options);
 }
 
 function runPnpm(arguments_, options = {}) {
@@ -233,61 +277,82 @@ async function validateOnePackage(root, definition, lockfile) {
   }
   await stat(join(packageDirectory, "README.md"));
   await stat(join(packageDirectory, "LICENSE"));
-  if (!lockfile.importers.has(`packages/${definition.directory}`)) {
-    fail(`${definition.name} is missing from pnpm-lock.yaml`);
-  }
+  assertPnpmLockfileSynchronized(
+    lockfile,
+    `packages/${definition.directory}`,
+    manifest.dependencies ?? {},
+  );
   return { definition, packageDirectory, manifest };
 }
 
-function parsePnpmLockfileImporters(text) {
-  const importers = new Set();
-  const specifiers = new Map();
-  const lines = text.split("\n");
-  let inImporters = false;
-  let currentImporter = null;
-  let currentDependency = null;
+export function lockfileImporterBlock(lockfile, importer) {
+  const heading = `  ${importer}:`;
+  const lines = lockfile.split("\n");
+  const start = lines.findIndex(
+    (line) => line === heading || line.startsWith(`${heading} `),
+  );
+  if (start === -1) return null;
+  const block = [];
+  for (const line of lines.slice(start + 1)) {
+    if (/^  \S/u.test(line) || /^[^\s]/u.test(line)) break;
+    block.push(line);
+  }
+  return block.join("\n");
+}
 
-  for (const line of lines) {
-    if (!inImporters) {
-      if (line === "importers:") inImporters = true;
-      continue;
+export function parseImporterDependencyPins(block) {
+  const pins = {};
+  const pattern =
+    /^ {6}('[^']+'|[A-Za-z0-9@/._-]+):\n {8}specifier: (\S+)\n {8}version: (\S+)$/gmu;
+  for (const match of block.matchAll(pattern)) {
+    let name = match[1];
+    if (name.startsWith("'") && name.endsWith("'")) {
+      name = name.slice(1, -1);
     }
-    if (line.length > 0 && !line.startsWith(" ") && !line.startsWith("\t")) {
-      break;
-    }
-    const importerMatch = /^ {2}(\.[^:]*|packages\/[^:]+):/.exec(line);
-    if (importerMatch !== null) {
-      currentImporter = importerMatch[1];
-      currentDependency = null;
-      importers.add(currentImporter);
-      specifiers.set(currentImporter, new Map());
-      continue;
-    }
-    const dependencyMatch = /^ {6}('([^']+)'|([^:]+)):$/.exec(line);
-    if (dependencyMatch !== null && currentImporter !== null) {
-      currentDependency = dependencyMatch[2] ?? dependencyMatch[3];
-      continue;
-    }
-    const specifierMatch = /^ {8}specifier: (.+)$/.exec(line);
+    pins[name] = { specifier: match[2], version: match[3] };
+  }
+  return pins;
+}
+
+function resolvedVersionMatchesPin(resolved, specifier) {
+  if (resolved.startsWith("link:")) return true;
+  if (STABLE_SEMVER.test(specifier)) {
+    return resolved === specifier || resolved.startsWith(`${specifier}(`);
+  }
+  return resolved.length > 0;
+}
+
+export function assertPnpmLockfileSynchronized(
+  lockfile,
+  importer,
+  dependencies,
+) {
+  if (!/^lockfileVersion:/u.test(lockfile)) {
+    fail("pnpm-lock.yaml is missing lockfileVersion");
+  }
+  const block = lockfileImporterBlock(lockfile, importer);
+  if (block === null) {
+    fail(`${importer} is missing from pnpm-lock.yaml`);
+  }
+  const pins = parseImporterDependencyPins(block);
+  for (const [name, specifier] of Object.entries(dependencies)) {
+    const entry = pins[name];
     if (
-      specifierMatch !== null &&
-      currentImporter !== null &&
-      currentDependency !== null
+      entry === undefined ||
+      entry.specifier !== specifier ||
+      !resolvedVersionMatchesPin(entry.version, specifier)
     ) {
-      specifiers.get(currentImporter).set(currentDependency, specifierMatch[1]);
-      currentDependency = null;
+      fail(
+        `${name}@${specifier} is not synchronized with its own pnpm-lock.yaml entry`,
+      );
     }
   }
-
-  return { importers, specifiers };
 }
 
 export async function validateRepository(options = {}) {
   const root = resolve(options.root ?? defaultRoot());
   const rootManifest = await readJson(join(root, "package.json"));
-  const lockfile = parsePnpmLockfileImporters(
-    await readFile(join(root, "pnpm-lock.yaml"), "utf8"),
-  );
+  const lockfile = await readFile(join(root, "pnpm-lock.yaml"), "utf8");
 
   if (
     rootManifest.private !== true ||
@@ -317,13 +382,6 @@ export async function validateRepository(options = {}) {
       if (dependencies[definition.name] !== sharedVersion) {
         fail(
           `${entry.manifest.name} must depend on ${definition.name}@${sharedVersion} exactly`,
-        );
-      }
-      const importer = `packages/${entry.definition.directory}`;
-      const locked = lockfile.specifiers.get(importer)?.get(definition.name);
-      if (locked !== sharedVersion) {
-        fail(
-          `${entry.manifest.name} lockfile specifier for ${definition.name} must be ${sharedVersion}`,
         );
       }
     }
