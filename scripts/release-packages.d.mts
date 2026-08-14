@@ -34,6 +34,37 @@ export interface ValidationResult {
 
 export const RELEASE_PACKAGES: readonly ReleasePackageDefinition[];
 
+export const REVIEWED_PNPM: {
+  readonly version: string;
+};
+
+export function resolveNpmCli(): string;
+
+export function lockfileImporterBlock(
+  lockfile: string,
+  importer: string,
+): string | null;
+
+export function parseImporterDependencyPins(block: string): {
+  readonly [name: string]: {
+    readonly specifier: string;
+    readonly version: string;
+  };
+};
+
+export function unquoteYamlScalar(value: string): string;
+
+export function resolvedVersionSatisfies(
+  specifier: string,
+  resolvedVersion: string,
+): boolean;
+
+export function assertPnpmLockfileSynchronized(
+  lockfile: string,
+  importer: string,
+  dependencies: { readonly [name: string]: string },
+): void;
+
 export function parseArguments(
   arguments_: readonly string[],
 ): ReleaseCommandOptions;

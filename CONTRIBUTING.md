@@ -15,13 +15,16 @@ Thank you for helping improve Storage Blobs.
 
 ## Local development
 
-Storage Blobs requires Node.js 22 or newer.
+Storage Blobs requires Node.js 22 or newer. Corepack is bundled through
+Node 24; on Node 25 or newer, install it first.
 
 ```sh
-npm ci
-npm run check
-npm test
-npm run format:check
+npm install -g corepack
+corepack enable
+pnpm install
+pnpm run check
+pnpm test
+pnpm run format:check
 ```
 
 ## Pull requests

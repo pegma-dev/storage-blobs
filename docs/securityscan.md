@@ -7,7 +7,7 @@ Scope: repository `storage-blobs` (Pegma `@pegma/storage-*` packages)
 
 ### Stack
 
-- Monorepo (npm workspaces), TypeScript, ESM-only, Node >= 22, vitest.
+- Monorepo (pnpm workspaces), TypeScript, ESM-only, Node >= 22, vitest.
 - Packages:
   - `@pegma/storage-blobs` — port, memory store, conformance suite (no runtime deps).
   - `@pegma/storage-azure-blob` — Azure Blob adapter (Azurite in CI).
@@ -46,7 +46,7 @@ authorized the caller. Attacker-relevant surfaces:
 
 ### Excluded
 
-- `node_modules/`, `package-lock.json`, `dist/`, `*.tsbuildinfo` (generated)
+- `node_modules/`, `pnpm-lock.yaml`, `dist/`, `*.tsbuildinfo` (generated)
 - `docs/*.md`, READMEs (documentation)
 
 ### Phase 1 — Mechanized sweeps (raw output summarized)
@@ -111,7 +111,7 @@ advisories are still present in the dev-only azurite chain and there is no
 upstream fix to take: 3.36.0 is the latest release, and npm's proposed 3.33.0 is
 a downgrade that keeps the same vulnerable `rimraf` and pulls _older_ `uuid` and
 `@azure/ms-rest-js`. What changed is the boundary: CI now gates on
-`npm audit --omit=dev --audit-level=low`, so shipped dependencies are enforced
+`pnpm audit --prod --audit-level=low`, so shipped dependencies are enforced
 clean (currently 0 advisories) and any future _runtime_ advisory fails the build,
 while the dev-chain advisories remain a tracked, non-gating item to re-check when
 azurite next releases.
@@ -133,7 +133,7 @@ azurite next releases.
 - **Fix:** Track an azurite release that drops the vulnerable transitives and
   bump the devDependency when available (npm currently proposes azurite
   3.33.0 as the "fix", which is a downgrade — verify before applying). Add
-  `npm audit --omit=dev` (expected clean) to CI so a _runtime_ advisory fails
+  `pnpm audit --prod` (expected clean) to CI so a _runtime_ advisory fails
   the build, and keep dev-chain advisories as a tracked, non-gating item.
 
 ### [LOW] Publish pipeline trusts the cross-job artifact's self-consistency

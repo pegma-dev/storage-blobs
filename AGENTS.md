@@ -73,7 +73,7 @@ renders blank without them. Each needs `prepack` running the build, or a stale
 ## Workflow
 
 Work on a `claude/*` branch and open a pull request. The gate is
-`npm run format:check`, `npm run check`, and `npm test` — all three, on Node 22
+`pnpm run format:check`, `pnpm run check`, and `pnpm test` — all three, on Node 22
 and 24.
 
 Publishing is trusted-publisher only; no tokens exist. A release starts from a

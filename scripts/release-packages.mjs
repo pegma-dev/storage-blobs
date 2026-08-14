@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash, timingSafeEqual } from "node:crypto";
+import { existsSync } from "node:fs";
 import {
   mkdtemp,
   mkdir,
@@ -14,8 +15,13 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPOSITORY_URL = "git+https://github.com/pegma-dev/storage-blobs.git";
-const REVIEWED_NPM_VERSION = "11.18.0";
+const REVIEWED_PNPM_VERSION = "10.34.5";
 const STABLE_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
+
+/** Workspace package manager pinned in package.json via Corepack. */
+export const REVIEWED_PNPM = {
+  version: REVIEWED_PNPM_VERSION,
+};
 
 export const RELEASE_PACKAGES = [
   {
@@ -71,14 +77,59 @@ function run(command, arguments_, options = {}) {
   return result;
 }
 
+function isNpmCliPath(execPath) {
+  // `pnpm run` sets npm_execpath to .../pnpm.cjs. Never treat that, or an
+  // npm-cli.js nested under a pnpm install, as the reviewed npm CLI.
+  if (/pnpm/i.test(execPath)) return false;
+  return basename(execPath).toLowerCase() === "npm-cli.js";
+}
+
+function npmCliBeside(nodeOrBinDirectory) {
+  return [
+    join(
+      nodeOrBinDirectory,
+      "..",
+      "lib",
+      "node_modules",
+      "npm",
+      "bin",
+      "npm-cli.js",
+    ),
+    join(nodeOrBinDirectory, "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+    join(nodeOrBinDirectory, "node_modules", "npm", "bin", "npm-cli.js"),
+  ];
+}
+
+export function resolveNpmCli() {
+  const execPath = process.env.npm_execpath;
+  if (execPath !== undefined && isNpmCliPath(execPath)) {
+    return execPath;
+  }
+  // `pnpm run` sets npm_execpath to pnpm. Pack, publish, registry view, and
+  // the trusted-publishing version gate still use a real npm CLI.
+  const candidates = npmCliBeside(dirname(process.execPath));
+  const pathEnv = process.env.PATH ?? "";
+  const delimiter = process.platform === "win32" ? ";" : ":";
+  for (const directory of pathEnv.split(delimiter)) {
+    if (directory !== "") candidates.push(...npmCliBeside(directory));
+  }
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  fail(
+    "could not resolve the npm CLI used to pack and publish; Node's bundled npm is required",
+  );
+}
+
 function runNpm(arguments_, options = {}) {
-  const npmExecPath = process.env.npm_execpath;
-  return npmExecPath === undefined
-    ? run(process.platform === "win32" ? "npm.cmd" : "npm", arguments_, {
-        ...options,
-        shell: process.platform === "win32",
-      })
-    : run(process.execPath, [npmExecPath, ...arguments_], options);
+  return run(process.execPath, [resolveNpmCli(), ...arguments_], options);
+}
+
+function runPnpm(arguments_, options = {}) {
+  return run(process.platform === "win32" ? "pnpm.cmd" : "pnpm", arguments_, {
+    ...options,
+    shell: process.platform === "win32",
+  });
 }
 
 function gitCommand() {
@@ -188,7 +239,6 @@ export function validateReleaseTag(options = {}) {
 async function validateOnePackage(root, definition, lockfile) {
   const packageDirectory = join(root, "packages", definition.directory);
   const manifest = await readJson(join(packageDirectory, "package.json"));
-  const lockEntry = lockfile.packages?.[`packages/${definition.directory}`];
 
   if (
     manifest.name !== definition.name ||
@@ -227,24 +277,204 @@ async function validateOnePackage(root, definition, lockfile) {
   }
   await stat(join(packageDirectory, "README.md"));
   await stat(join(packageDirectory, "LICENSE"));
-  if (lockEntry?.version !== manifest.version) {
-    fail(
-      `${definition.name} version is not synchronized with package-lock.json`,
+  assertPnpmLockfileSynchronized(lockfile, `packages/${definition.directory}`, {
+    ...manifest.dependencies,
+    ...manifest.peerDependencies,
+  });
+  return { definition, packageDirectory, manifest };
+}
+
+export function lockfileImporterBlock(lockfile, importer) {
+  const heading = `  ${importer}:`;
+  const lines = lockfile.split("\n");
+  const start = lines.findIndex(
+    (line) => line === heading || line.startsWith(`${heading} `),
+  );
+  if (start === -1) return null;
+  const block = [];
+  for (const line of lines.slice(start + 1)) {
+    if (/^  \S/u.test(line) || /^[^\s]/u.test(line)) break;
+    block.push(line);
+  }
+  return block.join("\n");
+}
+
+export function unquoteYamlScalar(value) {
+  if (typeof value !== "string" || value.length < 2) {
+    return value;
+  }
+  if (value.startsWith("'") && value.endsWith("'")) {
+    return value.slice(1, -1).replaceAll("''", "'");
+  }
+  if (value.startsWith('"') && value.endsWith('"')) {
+    return value.slice(1, -1).replaceAll(/\\(["\\/bfnrt])/gu, (_match, ch) => {
+      if (ch === "b") {
+        return "\b";
+      }
+      if (ch === "f") {
+        return "\f";
+      }
+      if (ch === "n") {
+        return "\n";
+      }
+      if (ch === "r") {
+        return "\r";
+      }
+      if (ch === "t") {
+        return "\t";
+      }
+      return ch;
+    });
+  }
+  return value;
+}
+
+export function parseImporterDependencyPins(block) {
+  const pins = {};
+  const pattern =
+    /^ {6}('[^']+'|"[^"]+"|[A-Za-z0-9@/._-]+):\n {8}specifier: (.+)\n {8}version: (.+)$/gmu;
+  for (const match of block.matchAll(pattern)) {
+    const name = unquoteYamlScalar(match[1]);
+    pins[name] = {
+      specifier: unquoteYamlScalar(match[2]),
+      version: unquoteYamlScalar(match[3]),
+    };
+  }
+  return pins;
+}
+
+function lockResolvedVersion(version) {
+  if (version.startsWith("link:")) {
+    return version;
+  }
+  return /^(\S+?)(?:\(|$)/u.exec(version)?.[1] ?? version;
+}
+
+function parseStableSemver(version) {
+  const match = STABLE_SEMVER.exec(version);
+  if (match === null) {
+    return null;
+  }
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+  };
+}
+
+function compareStableSemver(left, right) {
+  return (
+    left.major - right.major ||
+    left.minor - right.minor ||
+    left.patch - right.patch
+  );
+}
+
+/**
+ * Exact pins must match the resolved version. A range such as `^1.2.0` may
+ * resolve to `1.2.3`. Workspace `link:` entries are accepted as-is.
+ */
+export function resolvedVersionSatisfies(specifier, resolvedVersion) {
+  const resolved = lockResolvedVersion(resolvedVersion);
+  if (resolved.startsWith("link:")) {
+    return true;
+  }
+  if (resolved === specifier) {
+    return true;
+  }
+  if (STABLE_SEMVER.test(specifier)) {
+    return false;
+  }
+  const parsedResolved = parseStableSemver(resolved);
+  if (parsedResolved === null) {
+    return false;
+  }
+  if (specifier === "*" || specifier === "x" || specifier === "X") {
+    return true;
+  }
+  const majorOnly = /^(0|[1-9]\d*)$/u.exec(specifier);
+  if (majorOnly !== null) {
+    return parsedResolved.major === Number(majorOnly[1]);
+  }
+  const minorOnly = /^(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.exec(specifier);
+  if (minorOnly !== null) {
+    return (
+      parsedResolved.major === Number(minorOnly[1]) &&
+      parsedResolved.minor === Number(minorOnly[2])
     );
   }
-  return { definition, packageDirectory, manifest };
+  const caret = /^\^((0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*))$/u.exec(
+    specifier,
+  );
+  if (caret !== null) {
+    const floor = parseStableSemver(caret[1]);
+    if (floor === null || compareStableSemver(parsedResolved, floor) < 0) {
+      return false;
+    }
+    if (floor.major > 0) {
+      return parsedResolved.major === floor.major;
+    }
+    if (floor.minor > 0) {
+      return parsedResolved.major === 0 && parsedResolved.minor === floor.minor;
+    }
+    return (
+      parsedResolved.major === 0 &&
+      parsedResolved.minor === 0 &&
+      parsedResolved.patch === floor.patch
+    );
+  }
+  const tilde = /^~((0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*))$/u.exec(
+    specifier,
+  );
+  if (tilde !== null) {
+    const floor = parseStableSemver(tilde[1]);
+    return (
+      floor !== null &&
+      compareStableSemver(parsedResolved, floor) >= 0 &&
+      parsedResolved.major === floor.major &&
+      parsedResolved.minor === floor.minor
+    );
+  }
+  return resolved === specifier;
+}
+
+export function assertPnpmLockfileSynchronized(
+  lockfile,
+  importer,
+  dependencies,
+) {
+  if (!/^lockfileVersion:/u.test(lockfile)) {
+    fail("pnpm-lock.yaml is missing lockfileVersion");
+  }
+  const block = lockfileImporterBlock(lockfile, importer);
+  if (block === null) {
+    fail(`${importer} is missing from pnpm-lock.yaml`);
+  }
+  const pins = parseImporterDependencyPins(block);
+  for (const [name, specifier] of Object.entries(dependencies)) {
+    const entry = pins[name];
+    if (
+      entry === undefined ||
+      entry.specifier !== specifier ||
+      !resolvedVersionSatisfies(specifier, entry.version)
+    ) {
+      fail(
+        `${name}@${specifier} is not synchronized with its own pnpm-lock.yaml entry`,
+      );
+    }
+  }
 }
 
 export async function validateRepository(options = {}) {
   const root = resolve(options.root ?? defaultRoot());
   const rootManifest = await readJson(join(root, "package.json"));
-  const lockfile = await readJson(join(root, "package-lock.json"));
+  const lockfile = await readFile(join(root, "pnpm-lock.yaml"), "utf8");
 
   if (
     rootManifest.private !== true ||
-    rootManifest.packageManager !== `npm@${REVIEWED_NPM_VERSION}`
+    rootManifest.packageManager !== `pnpm@${REVIEWED_PNPM_VERSION}`
   ) {
-    fail(`the private root must pin npm@${REVIEWED_NPM_VERSION}`);
+    fail(`the private root must pin pnpm@${REVIEWED_PNPM_VERSION}`);
   }
 
   const packages = [];
@@ -417,7 +647,7 @@ export async function prepareRelease(options = {}) {
     fail(`release output directory must be empty: ${output}`);
   }
 
-  runNpm(["run", "build"], { cwd: root });
+  runPnpm(["run", "build"], { cwd: root });
 
   // Pack every package before smoke tests so adapters can install sibling
   // tarballs instead of fetching unpublished versions from the registry.

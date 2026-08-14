@@ -55,7 +55,7 @@ export async function setup(): Promise<void> {
   );
   if (!existsSync(entry)) {
     throw new Error(
-      `Could not find Azurite's blob service at ${entry}. Run 'npm ci' first.`,
+      `Could not find Azurite's blob service at ${entry}. Run 'pnpm install' first.`,
     );
   }
 

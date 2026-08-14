@@ -52,13 +52,16 @@ marketing features.
 
 ## Development
 
-Requires Node.js 22 or newer.
+Requires Node.js 22 or newer. Corepack is bundled through Node 24; on
+Node 25 or newer, install it first.
 
 ```sh
-npm ci
-npm run format:check
-npm run check
-npm test
+npm install -g corepack
+corepack enable
+pnpm install
+pnpm run format:check
+pnpm run check
+pnpm test
 ```
 
 ## License
