@@ -18,6 +18,9 @@ export const MAX_LIST_PAGE_SIZE = 1_000;
  */
 export const DEFAULT_MAX_OBJECT_BYTES = 64 * 1_024 * 1_024;
 
+/** Maximum consecutive empty stream chunks accepted without byte progress. */
+export const MAX_EMPTY_BODY_CHUNKS_WITHOUT_PROGRESS = 10_000;
+
 /** Maximum number of user-metadata entries on one object. */
 export const MAX_USER_METADATA_ENTRIES = 16;
 
@@ -278,7 +281,6 @@ interface MemoryListCursor {
 }
 
 const textEncoder = new TextEncoder();
-const MAX_EMPTY_BODY_CHUNKS_WITHOUT_PROGRESS = 10_000;
 
 function assertWellFormedUnicode(value: string, label: string): void {
   for (let index = 0; index < value.length; index += 1) {

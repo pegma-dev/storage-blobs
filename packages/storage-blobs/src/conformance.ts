@@ -7,6 +7,7 @@ import {
   MAX_BLOB_KEY_BYTES,
   MAX_BLOB_KEY_SEGMENTS,
   MAX_CACHE_CONTROL_BYTES,
+  MAX_EMPTY_BODY_CHUNKS_WITHOUT_PROGRESS,
   MAX_LIST_PAGE_SIZE,
   MAX_USER_METADATA_TOTAL_BYTES,
   type BlobStore,
@@ -694,7 +695,7 @@ export const conformanceCases: readonly ConformanceCase[] = [
       () => store.put("streams/no-progress", stream),
       (error: unknown) => error instanceof BlobValidationError,
     );
-    assert.equal(reads > 10_000, true);
+    assert.equal(reads > MAX_EMPTY_BODY_CHUNKS_WITHOUT_PROGRESS, true);
     assert.equal(await store.head("streams/no-progress"), null);
   }),
 

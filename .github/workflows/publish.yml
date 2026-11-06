@@ -388,6 +388,10 @@ jobs:
             "TMP",
             "TMPDIR",
             "CI",
+            "ComSpec",
+            "COMSPEC",
+            "PATHEXT",
+            "WINDIR",
           ]);
           const npmRoot = mkdtempSync(join(process.env.RUNNER_TEMP, "release-npm-"));
           const userConfig = join(npmRoot, "user.npmrc");
@@ -456,14 +460,8 @@ jobs:
 
           try {
             const npmVersion = runNpm(["--version"]).stdout.trim();
-            const version = /^(\d+)\.(\d+)\.(\d+)/.exec(npmVersion);
-            if (
-              version === null ||
-              Number(version[1]) < 11 ||
-              (Number(version[1]) === 11 && Number(version[2]) < 5) ||
-              (Number(version[1]) === 11 && Number(version[2]) === 5 && Number(version[3]) < 1)
-            ) {
-              fail("trusted publishing requires npm 11.5.1 or newer");
+            if (npmVersion !== "11.18.0") {
+              fail("publication requires npm 11.18.0");
             }
 
             for (const record of records) {

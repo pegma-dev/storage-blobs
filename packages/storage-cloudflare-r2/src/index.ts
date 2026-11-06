@@ -13,6 +13,7 @@ import {
   BlobValidationError,
   DEFAULT_CONTENT_TYPE,
   DEFAULT_MAX_OBJECT_BYTES,
+  MAX_EMPTY_BODY_CHUNKS_WITHOUT_PROGRESS,
   assertValidBlobKey,
   assertValidBlobPrefix,
   assertValidCacheControl,
@@ -30,7 +31,6 @@ import {
 } from "@pegma/storage-blobs";
 
 const R2_LIST_CURSOR_PREFIX = "pegma-cloudflare-r2-list-v1:";
-const MAX_EMPTY_BODY_CHUNKS_WITHOUT_PROGRESS = 10_000;
 
 export interface CloudflareR2BlobStoreOptions {
   /**

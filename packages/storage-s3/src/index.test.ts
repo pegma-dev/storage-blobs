@@ -11,7 +11,7 @@ import {
   dualStoreConformanceCases,
   sizeLimitConformanceCases,
 } from "@pegma/storage-blobs/conformance";
-import { afterAll, describe, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
 import {
   LOCALSTACK_ACCESS_KEY,
@@ -180,6 +180,37 @@ describe("createS3BlobStore", () => {
       }
     });
   }
+
+  it("rejects a write response without an etag", async () => {
+    const name = nextBucketName();
+    await ensureEmptyBucket(name);
+    const client = serviceClient();
+    client.middlewareStack.add(
+      (next, context) => async (arguments_) => {
+        const result = await next(arguments_);
+        if (context.commandName === "PutObjectCommand") {
+          delete (result.output as { ETag?: string }).ETag;
+        }
+        return result;
+      },
+      { name: "omitPutEtag", step: "deserialize" },
+    );
+    const store = createS3BlobStore({
+      client,
+      bucket: name,
+      endpoint: HARNESS_ENDPOINT,
+    });
+    try {
+      await expect(
+        store.put("response/without-etag", new Uint8Array([1])),
+      ).rejects.toThrow("S3 put failed");
+      await expect(store.head("response/without-etag")).resolves.toMatchObject({
+        size: 1,
+      });
+    } finally {
+      client.destroy();
+    }
+  });
 
   for (const testCase of dualStoreConformanceCases) {
     it(testCase.name, async () => {

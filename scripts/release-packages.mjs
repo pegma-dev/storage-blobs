@@ -24,12 +24,17 @@ import { fileURLToPath } from "node:url";
 
 const REPOSITORY_URL = "git+https://github.com/pegma-dev/storage-blobs.git";
 const NPM_REGISTRY = "https://registry.npmjs.org/";
+const REVIEWED_NPM_VERSION = "11.18.0";
 const REVIEWED_PNPM_VERSION = "10.34.5";
 const STABLE_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 
 /** Workspace package manager pinned in package.json via Corepack. */
 export const REVIEWED_PNPM = {
   version: REVIEWED_PNPM_VERSION,
+};
+
+export const REVIEWED_NPM = {
+  version: REVIEWED_NPM_VERSION,
 };
 
 export const RELEASE_PACKAGES = [
@@ -50,6 +55,8 @@ export const RELEASE_PACKAGES = [
     name: "@pegma/storage-s3",
   },
 ];
+
+export const RELEASE_MANIFEST_SCHEMA_VERSION = 3;
 
 function fail(message) {
   throw new Error(message);
@@ -829,7 +836,7 @@ export async function prepareRelease(options = {}) {
   }
 
   const prepared = {
-    schemaVersion: 3,
+    schemaVersion: RELEASE_MANIFEST_SCHEMA_VERSION,
     gitCommit,
     releaseTag: releaseTag ?? null,
     packages: preparedPackages,
@@ -903,15 +910,8 @@ export function decidePublication(localIntegrity, registryIntegrity) {
 
 function requireTrustedPublishingNpm() {
   const version = runNpm(["--version"], { capture: true }).stdout.trim();
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:-.+)?$/u.exec(version);
-  if (match === null) fail(`could not parse npm version ${version}`);
-  const [major, minor, patch] = match.slice(1).map(Number);
-  if (
-    major < 11 ||
-    (major === 11 && minor < 5) ||
-    (major === 11 && minor === 5 && patch < 1)
-  ) {
-    fail("trusted publishing requires npm 11.5.1 or newer");
+  if (version !== REVIEWED_NPM_VERSION) {
+    fail(`publication requires npm ${REVIEWED_NPM_VERSION}`);
   }
 }
 
@@ -938,7 +938,7 @@ async function verifyPreparedManifest(path, expectedManifestDigest) {
   if (
     Object.keys(prepared).sort().join(",") !==
       "gitCommit,packages,releaseTag,schemaVersion" ||
-    prepared.schemaVersion !== 3 ||
+    prepared.schemaVersion !== RELEASE_MANIFEST_SCHEMA_VERSION ||
     !/^[0-9a-f]{40}$/u.test(prepared.gitCommit) ||
     !/^v(0\.[1-9][0-9]*|[1-9][0-9]*\.[0-9]+)\.[0-9]+$/u.test(
       prepared.releaseTag,

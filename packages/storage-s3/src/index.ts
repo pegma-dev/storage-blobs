@@ -13,6 +13,7 @@ import {
   BlobValidationError,
   DEFAULT_CONTENT_TYPE,
   DEFAULT_MAX_OBJECT_BYTES,
+  MAX_EMPTY_BODY_CHUNKS_WITHOUT_PROGRESS,
   assertValidBlobKey,
   assertValidBlobPrefix,
   assertValidCacheControl,
@@ -30,7 +31,6 @@ import {
 } from "@pegma/storage-blobs";
 
 const S3_LIST_CURSOR_PREFIX = "pegma-s3-list-v1:";
-const MAX_EMPTY_BODY_CHUNKS_WITHOUT_PROGRESS = 10_000;
 
 export interface S3BlobStoreOptions {
   /**

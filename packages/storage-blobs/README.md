@@ -64,6 +64,12 @@ Expected races return a result, not an exception:
 
 Infrastructure failures still throw (`BlobStoreError` and subclasses).
 
+### Keys and prefixes
+
+Keys and list prefixes use `/`-delimited segments. A segment equal to `.` or
+`..` is rejected; dot-prefixed names such as `.hidden` and `.well-known` remain
+valid. A trailing slash is valid for prefixes such as `support-desk/`.
+
 ### Listing for GC
 
 ```ts

@@ -35,7 +35,13 @@ export interface ValidationResult {
 
 export const RELEASE_PACKAGES: readonly ReleasePackageDefinition[];
 
+export const RELEASE_MANIFEST_SCHEMA_VERSION: number;
+
 export const REVIEWED_PNPM: {
+  readonly version: string;
+};
+
+export const REVIEWED_NPM: {
   readonly version: string;
 };
 

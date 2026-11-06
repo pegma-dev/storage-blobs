@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   RELEASE_PACKAGES,
+  RELEASE_MANIFEST_SCHEMA_VERSION,
+  REVIEWED_NPM,
   REVIEWED_PNPM,
   assertPnpmLockfileSynchronized,
   decidePublication,
@@ -63,6 +65,40 @@ describe("release package metadata", () => {
       "@pegma/storage-cloudflare-r2",
       "@pegma/storage-s3",
     ]);
+  });
+
+  it("keeps workflow-owned publication constants aligned", () => {
+    const workflow = readFileSync(
+      join(process.cwd(), ".github", "workflows", "publish.yml"),
+      "utf8",
+    );
+    const packageBlock = /const packages = \[([\s\S]*?)\];/u.exec(
+      workflow,
+    )?.[1];
+    expect(packageBlock).toBeDefined();
+    const workflowPackages = [
+      ...(packageBlock ?? "").matchAll(/"(@pegma\/[^"]+)"/gu),
+    ].map((match) => match[1]);
+    expect(workflowPackages).toEqual(RELEASE_PACKAGES.map(({ name }) => name));
+
+    const schemaVersion = /manifest\.schemaVersion !== (\d+)/u.exec(
+      workflow,
+    )?.[1];
+    expect(schemaVersion).toBe(String(RELEASE_MANIFEST_SCHEMA_VERSION));
+    expect(workflow).toContain(`npmVersion !== "${REVIEWED_NPM.version}"`);
+    for (const name of ["ComSpec", "COMSPEC", "PATHEXT", "WINDIR"]) {
+      expect(workflow).toContain(`"${name}"`);
+    }
+
+    const tagPatterns = [
+      ...workflow.matchAll(
+        /if \[\[ ! "\$\{RELEASE_TAG\}" =~ ([^ ]+) \]\]; then/gu,
+      ),
+    ].map((match) => match[1]);
+    expect(tagPatterns).toHaveLength(2);
+    expect(new Set(tagPatterns).size).toBe(1);
+    expect(workflow.match(/verify-tag/gu)).toHaveLength(2);
+    expect(workflow.match(/merge-base --is-ancestor/gu)).toHaveLength(2);
   });
 
   it("validates package manifests and the lockfile together", async () => {
@@ -346,7 +382,9 @@ describe("release source authentication", () => {
 });
 
 describe("prepared manifest anchoring", () => {
-  const manifestBytes = '{"schemaVersion":3}\n';
+  const manifestBytes = `${JSON.stringify({
+    schemaVersion: RELEASE_MANIFEST_SCHEMA_VERSION,
+  })}\n`;
   const digest = digestManifest(manifestBytes);
 
   it("accepts the digest recorded by the preparation job", () => {
@@ -358,9 +396,12 @@ describe("prepared manifest anchoring", () => {
   });
 
   it("rejects a manifest replaced alongside its tarballs", () => {
-    expect(() =>
-      verifyManifestDigest('{"schemaVersion":3} \n', digest),
-    ).toThrow("does not match the digest recorded by the preparation job");
+    const replacement = `${JSON.stringify({
+      schemaVersion: RELEASE_MANIFEST_SCHEMA_VERSION,
+    })} \n`;
+    expect(() => verifyManifestDigest(replacement, digest)).toThrow(
+      "does not match the digest recorded by the preparation job",
+    );
   });
 
   it("refuses to publish without a usable expected digest", () => {

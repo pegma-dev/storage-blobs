@@ -44,16 +44,16 @@ Before checking out release source or running repository code, the workflow
 authenticates the tag in a fresh bare repository and verifies that it:
 
 - is a stable annotated `vX.Y.Z` tag signed by an allowed signer;
-- matches a public package version in the release inventory;
 - points to the checkout and the GitHub release-event commit; and
 - is contained in `origin/main`.
 
 Only after those checks does preparation check out the exact release-event
-commit. Its preparation job has no OIDC permission. It enables Corepack for
-the reviewed pnpm version, installs the reviewed `npm@11.18.0`, runs the full
-gate against `pnpm-lock.yaml` without dependency caching, removes prior build
-outputs, builds and packs once, records SHA-256 and SHA-512 values, enforces an
-exact regular-file inventory, and uploads the sealed artifact immediately.
+commit and confirm that the tag matches the shared public package version. Its
+preparation job has no OIDC permission. It enables Corepack for the reviewed
+pnpm version, installs the reviewed `npm@11.18.0`, runs the full gate against
+`pnpm-lock.yaml` without dependency caching, removes prior build outputs,
+builds and packs once, records SHA-256 and SHA-512 values, enforces an exact
+regular-file inventory, and uploads the sealed artifact immediately.
 
 A separate unprivileged smoke job downloads a copy, verifies the manifest
 digest recorded by preparation, installs the tarballs in a clean consumer with
