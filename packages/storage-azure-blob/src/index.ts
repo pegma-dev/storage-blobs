@@ -5,17 +5,17 @@ import type {
   ContainerClient,
 } from "@azure/storage-blob";
 import {
-  BlobSizeLimitError,
   BlobStoreError,
   BlobValidationError,
   DEFAULT_CONTENT_TYPE,
   DEFAULT_MAX_OBJECT_BYTES,
-  MAX_EMPTY_BODY_CHUNKS_WITHOUT_PROGRESS,
+  assertValidEtag,
   assertValidBlobKey,
   assertValidBlobPrefix,
   assertValidCacheControl,
   assertValidContentType,
   normalizeUserMetadata,
+  readBlobBody,
   type BlobGetResult,
   type BlobListPage,
   type BlobObjectInfo,
@@ -94,105 +94,6 @@ function assertMaxBytes(
     );
   }
   return maxBytes;
-}
-
-function assertEtag(etag: string, label: string): void {
-  if (typeof etag !== "string" || etag.length === 0) {
-    throw new BlobValidationError(`${label} must be a non-empty string.`);
-  }
-  if (etag.trim() === "*") {
-    throw new BlobValidationError(`${label} must not be a wildcard.`);
-  }
-}
-
-function copyBytes(source: Uint8Array): Uint8Array {
-  const copy = new Uint8Array(source.byteLength);
-  copy.set(source);
-  return copy;
-}
-
-async function readBody(
-  body: ReadableStream<Uint8Array> | Uint8Array,
-  limitBytes: number,
-): Promise<Uint8Array> {
-  if (body instanceof Uint8Array) {
-    if (body.byteLength > limitBytes) {
-      throw new BlobSizeLimitError(limitBytes);
-    }
-    return copyBytes(body);
-  }
-
-  const reader = body.getReader();
-  let total = 0;
-  let emptyChunksWithoutProgress = 0;
-  let bytes = new Uint8Array(0);
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (!(value instanceof Uint8Array)) {
-        throw new BlobValidationError(
-          "Body stream chunks must be Uint8Array values.",
-        );
-      }
-      if (value.byteLength === 0) {
-        emptyChunksWithoutProgress += 1;
-        if (
-          emptyChunksWithoutProgress > MAX_EMPTY_BODY_CHUNKS_WITHOUT_PROGRESS
-        ) {
-          void reader.cancel().catch(() => {
-            /* validation error wins */
-          });
-          throw new BlobValidationError(
-            "Body stream produced too many empty chunks without progress.",
-          );
-        }
-        continue;
-      }
-      emptyChunksWithoutProgress = 0;
-      const nextTotal = total + value.byteLength;
-      if (nextTotal > limitBytes) {
-        void reader.cancel().catch(() => {
-          /* size error wins */
-        });
-        throw new BlobSizeLimitError(limitBytes);
-      }
-      if (bytes.byteLength < nextTotal) {
-        const nextCapacity = Math.min(
-          limitBytes,
-          Math.max(
-            nextTotal,
-            bytes.byteLength === 0 ? 16 * 1_024 : bytes.byteLength * 2,
-          ),
-        );
-        const grown = new Uint8Array(nextCapacity);
-        grown.set(bytes.subarray(0, total));
-        bytes = grown;
-      }
-      bytes.set(value, total);
-      total = nextTotal;
-    }
-  } catch (error) {
-    if (
-      error instanceof BlobSizeLimitError ||
-      error instanceof BlobValidationError
-    ) {
-      throw error;
-    }
-    throw new BlobStoreError("Failed to read object body stream.", {
-      cause: error,
-    });
-  }
-
-  if (total === 0) {
-    return new Uint8Array(0);
-  }
-  if (bytes.byteLength === total) {
-    return bytes;
-  }
-  return copyBytes(bytes.subarray(0, total));
 }
 
 function nodeStreamToWeb(
@@ -369,7 +270,7 @@ export function createAzureBlobStore(
         throw new BlobValidationError('ifNoneMatch must be the literal "*".');
       }
       if (ifMatch !== undefined) {
-        assertEtag(ifMatch, "ifMatch");
+        assertValidEtag(ifMatch, "ifMatch");
       }
 
       const contentType = assertValidContentType(
@@ -381,7 +282,7 @@ export function createAzureBlobStore(
           : assertValidCacheControl(putOptions.cacheControl);
       const userMetadata = normalizeUserMetadata(putOptions?.userMetadata);
       const limitBytes = assertMaxBytes(putOptions?.maxBytes, maxObjectBytes);
-      const bytes = await readBody(body, limitBytes);
+      const bytes = await readBlobBody(body, limitBytes);
 
       await ready();
       const blob = containedBlockBlobClient(key);
@@ -529,7 +430,7 @@ export function createAzureBlobStore(
       assertValidBlobKey(key);
       const ifMatch = deleteOptions?.ifMatch;
       if (ifMatch !== undefined) {
-        assertEtag(ifMatch, "ifMatch");
+        assertValidEtag(ifMatch, "ifMatch");
       }
       await ready();
       const blob = containedBlockBlobClient(key);

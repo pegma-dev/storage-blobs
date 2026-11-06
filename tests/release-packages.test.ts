@@ -375,6 +375,8 @@ describe("release source authentication", () => {
     );
     expect(prepare).toContain("--skip-smoke");
     expect(prepare).toContain("include-hidden-files: false");
+    expect(prepare).toContain("path: ${{ steps.manifest.outputs.files }}");
+    expect(prepare).not.toContain("path: .release/");
     expect(smoke).toContain("release-packages.mjs smoke");
     expect(workflow).not.toContain("workflow_dispatch");
     expect(workflow).toContain("retention-days: 30");

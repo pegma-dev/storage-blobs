@@ -789,6 +789,18 @@ export const conformanceCases: readonly ConformanceCase[] = [
     }
   }),
 
+  testCase("rejects control characters in ifMatch values", async (store) => {
+    const ifMatch = `etag${String.fromCharCode(0)}suffix`;
+    await assert.rejects(
+      () => store.put("cond/control", textBytes("x"), { ifMatch }),
+      (error: unknown) => error instanceof BlobValidationError,
+    );
+    await assert.rejects(
+      () => store.delete("cond/control", { ifMatch }),
+      (error: unknown) => error instanceof BlobValidationError,
+    );
+  }),
+
   testCase("accepts a key at the maximum UTF-8 byte length", async (store) => {
     const key = "k".repeat(MAX_BLOB_KEY_BYTES);
     const put = await store.put(key, textBytes("edge"));

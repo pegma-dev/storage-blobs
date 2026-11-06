@@ -68,7 +68,9 @@ Infrastructure failures still throw (`BlobStoreError` and subclasses).
 
 Keys and list prefixes use `/`-delimited segments. A segment equal to `.` or
 `..` is rejected; dot-prefixed names such as `.hidden` and `.well-known` remain
-valid. A trailing slash is valid for prefixes such as `support-desk/`.
+valid. A trailing slash is valid for prefixes such as `support-desk/`. To
+enumerate every dot-prefixed key, list without a prefix and filter the returned
+pages.
 
 ### Listing for GC
 

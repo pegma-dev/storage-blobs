@@ -118,6 +118,11 @@ jobs:
           set -euo pipefail
           digest="$(sha256sum .release/package-manifest.json | cut -d ' ' -f 1)"
           printf 'digest=%s\n' "${digest}" >> "${GITHUB_OUTPUT}"
+          {
+            printf 'files<<EOF\n'
+            find .release -mindepth 1 -maxdepth 1 -type f -print | LC_ALL=C sort
+            printf 'EOF\n'
+          } >> "${GITHUB_OUTPUT}"
           printf 'Prepared manifest SHA-256 %s\n' "${digest}" >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload the sealed release
@@ -125,7 +130,7 @@ jobs:
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: storage-blobs-release-${{ github.run_id }}
-          path: .release/
+          path: ${{ steps.manifest.outputs.files }}
           if-no-files-found: error
           include-hidden-files: false
           overwrite: true
@@ -143,7 +148,6 @@ jobs:
       contents: read
     env:
       CI: "1"
-      RELEASE_COMMIT: ${{ github.sha }}
       RELEASE_MANIFEST_DIGEST: ${{ needs.prepare.outputs.manifest-digest }}
 
     steps:
@@ -369,7 +373,9 @@ jobs:
           const actualInventory = entries.map(({ name }) => name).sort();
           expectedInventory.sort();
           if (JSON.stringify(actualInventory) !== JSON.stringify(expectedInventory)) {
-            fail("release artifact inventory does not match the package manifest");
+            fail(
+              `release artifact inventory mismatch: expected ${JSON.stringify(expectedInventory)}; received ${JSON.stringify(actualInventory)}`,
+            );
           }
           for (const entry of entries) {
             const details = lstatSync(join(artifactDirectory, entry.name));

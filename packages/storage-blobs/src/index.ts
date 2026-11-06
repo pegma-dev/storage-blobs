@@ -538,7 +538,8 @@ function assertMaxBytes(
   return maxBytes;
 }
 
-function assertEtag(etag: string, label: string): void {
+/** Validate a provider ETag used by a conditional operation. */
+export function assertValidEtag(etag: string, label: string): void {
   if (typeof etag !== "string" || etag.length === 0) {
     throw new BlobValidationError(`${label} must be a non-empty string.`);
   }
@@ -592,7 +593,8 @@ function decodeMemoryListCursor(storeId: string, cursor: string): string {
   }
 }
 
-async function readBody(
+/** Buffer an upload body while enforcing the configured byte limit. */
+export async function readBlobBody(
   body: ReadableStream<Uint8Array> | Uint8Array,
   limitBytes: number,
 ): Promise<Uint8Array> {
@@ -751,7 +753,7 @@ export function createMemoryBlobStore(
         throw new BlobValidationError('ifNoneMatch must be the literal "*".');
       }
       if (ifMatch !== undefined) {
-        assertEtag(ifMatch, "ifMatch");
+        assertValidEtag(ifMatch, "ifMatch");
       }
 
       const contentType = assertValidContentType(
@@ -779,7 +781,7 @@ export function createMemoryBlobStore(
         }
       }
 
-      const bytes = await readBody(body, limitBytes);
+      const bytes = await readBlobBody(body, limitBytes);
 
       // Re-check conditions after the body is fully read so a concurrent
       // create-only put still refuses the loser.
@@ -832,7 +834,7 @@ export function createMemoryBlobStore(
       assertValidBlobKey(key);
       const ifMatch = deleteOptions?.ifMatch;
       if (ifMatch !== undefined) {
-        assertEtag(ifMatch, "ifMatch");
+        assertValidEtag(ifMatch, "ifMatch");
       }
 
       const stored = objects.get(key);

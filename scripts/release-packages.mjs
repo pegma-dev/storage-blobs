@@ -713,7 +713,9 @@ async function assertReleaseInventory(directory, records) {
   const entries = await readdir(directory, { withFileTypes: true });
   const actual = entries.map(({ name }) => name).sort();
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-    fail("release output inventory does not match the prepared package list");
+    fail(
+      `release output inventory mismatch: expected ${JSON.stringify(expected)}; received ${JSON.stringify(actual)}`,
+    );
   }
   for (const entry of entries) {
     const path = join(directory, entry.name);
