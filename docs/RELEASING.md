@@ -43,7 +43,9 @@ and never move or recreate a release tag.
 Before checking out release source or running repository code, the workflow
 authenticates the tag in a fresh bare repository and verifies that it:
 
-- is a stable annotated `vX.Y.Z` tag signed by an allowed signer;
+- is a signed annotated tag in the stable package series (`v0.MINOR.PATCH`
+  with `MINOR >= 1`, or `vMAJOR.MINOR.PATCH` with `MAJOR >= 1`; `v0.0.x` is
+  not a release tag);
 - points to the checkout and the GitHub release-event commit; and
 - is contained in `origin/main`.
 
