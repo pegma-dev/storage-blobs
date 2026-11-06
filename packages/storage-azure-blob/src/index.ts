@@ -213,6 +213,9 @@ export function createAzureBlobStore(
   containerUrl.hash = "";
   const endpoint = containerUrl.toString();
   const containerPathPrefix = `${containerUrl.pathname.replace(/\/$/u, "")}/`;
+  const decodedContainerPathPrefix = `${decodeURIComponent(
+    containerUrl.pathname,
+  ).replace(/\/$/u, "")}/`;
   const backendId = `${container.accountName ?? "account"}|${endpoint}|${containerName}`;
   let ensureContainer: Promise<void> | undefined;
 
@@ -245,9 +248,26 @@ export function createAzureBlobStore(
         { cause: error },
       );
     }
+    let decodedBlobPath: string;
+    try {
+      decodedBlobPath = decodeURIComponent(blobUrl.pathname);
+    } catch (error) {
+      throw new BlobStoreError(
+        `Azure produced an invalid URL for ${JSON.stringify(key)}.`,
+        { cause: error },
+      );
+    }
+    const relativePath = decodedBlobPath.slice(
+      decodedContainerPathPrefix.length,
+    );
     if (
       blobUrl.origin !== containerUrl.origin ||
-      !blobUrl.pathname.startsWith(containerPathPrefix)
+      !blobUrl.pathname.startsWith(containerPathPrefix) ||
+      !decodedBlobPath.startsWith(decodedContainerPathPrefix) ||
+      relativePath.length === 0 ||
+      relativePath
+        .split("/")
+        .some((segment) => segment === "." || segment === "..")
     ) {
       throw new BlobStoreError(
         `Azure produced a URL outside the configured container for ${JSON.stringify(key)}.`,

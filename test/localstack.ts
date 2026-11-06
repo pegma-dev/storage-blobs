@@ -103,7 +103,14 @@ function runDocker(args: string[]): Promise<{
 
 export async function setup(): Promise<void> {
   if (await portAccepting(LOCALSTACK_PORT)) {
-    await waitForS3Ready(30_000);
+    try {
+      await waitForS3Ready(30_000);
+    } catch (error) {
+      throw new Error(
+        `Port ${LOCALSTACK_PORT} is already in use by a service that is not a ready LocalStack S3 instance.`,
+        { cause: error },
+      );
+    }
     return;
   }
 

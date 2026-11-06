@@ -8,6 +8,7 @@ import {
   RELEASE_MANIFEST_SCHEMA_VERSION,
   REVIEWED_NPM,
   REVIEWED_PNPM,
+  STABLE_RELEASE_TAG,
   assertPnpmLockfileSynchronized,
   decidePublication,
   digestManifest,
@@ -97,6 +98,25 @@ describe("release package metadata", () => {
     ].map((match) => match[1]);
     expect(tagPatterns).toHaveLength(2);
     expect(new Set(tagPatterns).size).toBe(1);
+    expect(tagPatterns[0]).toBe(STABLE_RELEASE_TAG.source);
+    const installedNpmVersions = [
+      ...workflow.matchAll(/npm install --global npm@([0-9.]+)/gu),
+    ].map((match) => match[1]);
+    expect(installedNpmVersions).toEqual([
+      REVIEWED_NPM.version,
+      REVIEWED_NPM.version,
+    ]);
+    for (const marker of [
+      'hash(manifestBytes, "sha256", "hex")',
+      'hash(bytes, "sha512", "base64")',
+      '"--provenance"',
+      '"--ignore-scripts"',
+      '"--registry"',
+      "/\\bE404\\b/.test(output)",
+      "expectedInventory.sort()",
+    ]) {
+      expect(workflow).toContain(marker);
+    }
     expect(workflow.match(/verify-tag/gu)).toHaveLength(2);
     expect(workflow.match(/merge-base --is-ancestor/gu)).toHaveLength(2);
   });

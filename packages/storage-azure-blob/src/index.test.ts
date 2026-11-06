@@ -137,4 +137,27 @@ describe("createAzureBlobStore", () => {
       "outside the configured container",
     );
   });
+
+  it("rejects encoded dot segments in a block client URL", async () => {
+    const container = serviceClient().getContainerClient(nextContainerName());
+    const realClient = container.getBlockBlobClient("some-key");
+    container.getBlockBlobClient = () =>
+      new Proxy(realClient, {
+        get(target, property, receiver) {
+          if (property === "url") {
+            return `${container.url}/%2e%2e/other`;
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      });
+
+    const store = createAzureBlobStore({
+      containerClient: container,
+      createContainerIfMissing: false,
+    });
+
+    await expect(store.head("some-key")).rejects.toThrow(
+      "outside the configured container",
+    );
+  });
 });

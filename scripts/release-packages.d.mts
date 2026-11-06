@@ -37,6 +37,8 @@ export const RELEASE_PACKAGES: readonly ReleasePackageDefinition[];
 
 export const RELEASE_MANIFEST_SCHEMA_VERSION: number;
 
+export const STABLE_RELEASE_TAG: RegExp;
+
 export const REVIEWED_PNPM: {
   readonly version: string;
 };

@@ -28,6 +28,9 @@ const REVIEWED_NPM_VERSION = "11.18.0";
 const REVIEWED_PNPM_VERSION = "10.34.5";
 const STABLE_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 
+export const STABLE_RELEASE_TAG =
+  /^v(0\.[1-9][0-9]*|[1-9][0-9]*\.[0-9]+)\.[0-9]+$/u;
+
 /** Workspace package manager pinned in package.json via Corepack. */
 export const REVIEWED_PNPM = {
   version: REVIEWED_PNPM_VERSION,
@@ -265,10 +268,7 @@ export function validateReleaseTag(options = {}) {
   const releaseTag = options.releaseTag ?? process.env.RELEASE_TAG;
   const expectedReleaseCommit =
     options.expectedReleaseCommit ?? process.env.RELEASE_COMMIT;
-  if (
-    releaseTag === undefined ||
-    !/^v(0\.[1-9][0-9]*|[1-9][0-9]*\.[0-9]+)\.[0-9]+$/u.test(releaseTag)
-  ) {
+  if (releaseTag === undefined || !STABLE_RELEASE_TAG.test(releaseTag)) {
     fail("a stable release tag is required");
   }
   if (
@@ -942,9 +942,8 @@ async function verifyPreparedManifest(path, expectedManifestDigest) {
       "gitCommit,packages,releaseTag,schemaVersion" ||
     prepared.schemaVersion !== RELEASE_MANIFEST_SCHEMA_VERSION ||
     !/^[0-9a-f]{40}$/u.test(prepared.gitCommit) ||
-    !/^v(0\.[1-9][0-9]*|[1-9][0-9]*\.[0-9]+)\.[0-9]+$/u.test(
-      prepared.releaseTag,
-    ) ||
+    (prepared.releaseTag !== null &&
+      !STABLE_RELEASE_TAG.test(prepared.releaseTag)) ||
     !Array.isArray(records) ||
     records.length !== RELEASE_PACKAGES.length
   ) {
@@ -966,7 +965,8 @@ async function verifyPreparedManifest(path, expectedManifestDigest) {
       Object.keys(record ?? {})
         .sort()
         .join(",") !== "exports,files,integrity,name,sha256,tarball,version" ||
-      prepared.releaseTag !== `v${record?.version}` ||
+      (prepared.releaseTag !== null &&
+        prepared.releaseTag !== `v${record?.version}`) ||
       record?.name !== definition.name ||
       !STABLE_SEMVER.test(record.version) ||
       !/^[0-9a-f]{64}$/u.test(record.sha256) ||
