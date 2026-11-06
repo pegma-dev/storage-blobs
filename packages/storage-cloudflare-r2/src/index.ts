@@ -30,6 +30,7 @@ import {
 } from "@pegma/storage-blobs";
 
 const R2_LIST_CURSOR_PREFIX = "pegma-cloudflare-r2-list-v1:";
+const MAX_EMPTY_BODY_CHUNKS_WITHOUT_PROGRESS = 10_000;
 
 export interface CloudflareR2BlobStoreOptions {
   /**
@@ -161,6 +162,9 @@ function assertEtag(etag: string, label: string): void {
   if (typeof etag !== "string" || etag.length === 0) {
     throw new BlobValidationError(`${label} must be a non-empty string.`);
   }
+  if (etag.trim() === "*") {
+    throw new BlobValidationError(`${label} must not be a wildcard.`);
+  }
 }
 
 function assertBucketName(bucket: string): void {
@@ -187,8 +191,9 @@ async function readBody(
   }
 
   const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
   let total = 0;
+  let emptyChunksWithoutProgress = 0;
+  let bytes = new Uint8Array(0);
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -200,14 +205,42 @@ async function readBody(
           "Body stream chunks must be Uint8Array values.",
         );
       }
-      total += value.byteLength;
-      if (total > limitBytes) {
+      if (value.byteLength === 0) {
+        emptyChunksWithoutProgress += 1;
+        if (
+          emptyChunksWithoutProgress > MAX_EMPTY_BODY_CHUNKS_WITHOUT_PROGRESS
+        ) {
+          void reader.cancel().catch(() => {
+            /* validation error wins */
+          });
+          throw new BlobValidationError(
+            "Body stream produced too many empty chunks without progress.",
+          );
+        }
+        continue;
+      }
+      emptyChunksWithoutProgress = 0;
+      const nextTotal = total + value.byteLength;
+      if (nextTotal > limitBytes) {
         void reader.cancel().catch(() => {
           /* size error wins */
         });
         throw new BlobSizeLimitError(limitBytes);
       }
-      chunks.push(copyBytes(value));
+      if (bytes.byteLength < nextTotal) {
+        const nextCapacity = Math.min(
+          limitBytes,
+          Math.max(
+            nextTotal,
+            bytes.byteLength === 0 ? 16 * 1_024 : bytes.byteLength * 2,
+          ),
+        );
+        const grown = new Uint8Array(nextCapacity);
+        grown.set(bytes.subarray(0, total));
+        bytes = grown;
+      }
+      bytes.set(value, total);
+      total = nextTotal;
     }
   } catch (error) {
     if (
@@ -221,19 +254,13 @@ async function readBody(
     });
   }
 
-  if (chunks.length === 0) {
+  if (total === 0) {
     return new Uint8Array(0);
   }
-  if (chunks.length === 1) {
-    return chunks[0]!;
+  if (bytes.byteLength === total) {
+    return bytes;
   }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
+  return copyBytes(bytes.subarray(0, total));
 }
 
 function encodeListCursor(backendId: string, continuation: string): string {
@@ -474,22 +501,15 @@ export function createCloudflareR2BlobStore(
         input.IfMatch = ifMatch;
       }
 
-      const finishPut = async (response: {
+      const finishPut = (response: {
         ETag?: string | undefined;
-      }): Promise<PutResult> => {
+      }): PutResult => {
         bucketVerified = true;
-        const etag = response.ETag;
-        if (etag === undefined || etag.length === 0) {
-          // Some S3-compatible servers omit ETag on put; re-read via HEAD.
-          const head = await headRaw(key);
-          if (head === null) {
-            throw new BlobStoreError(
-              `R2 put returned no etag and object is missing for ${JSON.stringify(key)}.`,
-            );
-          }
-          return { ok: true, etag: head.etag, size: bytes.byteLength };
-        }
-        return { ok: true, etag, size: bytes.byteLength };
+        return {
+          ok: true,
+          etag: requireEtag(response.ETag, key),
+          size: bytes.byteLength,
+        };
       };
 
       try {

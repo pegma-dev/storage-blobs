@@ -121,4 +121,20 @@ describe("createAzureBlobStore", () => {
     await expect(store.head("some-key")).resolves.toBeNull();
     expect(createAttempts).toBe(2);
   });
+
+  it("rejects a block client outside the configured container", async () => {
+    const service = serviceClient();
+    const container = service.getContainerClient(nextContainerName());
+    const other = service.getContainerClient(nextContainerName());
+    container.getBlockBlobClient = (key) => other.getBlockBlobClient(key);
+
+    const store = createAzureBlobStore({
+      containerClient: container,
+      createContainerIfMissing: false,
+    });
+
+    await expect(store.head("some-key")).rejects.toThrow(
+      "outside the configured container",
+    );
+  });
 });

@@ -28,6 +28,7 @@ import {
 } from "@pegma/storage-blobs";
 
 const AZURE_LIST_CURSOR_PREFIX = "pegma-azure-blob-list-v1:";
+const MAX_EMPTY_BODY_CHUNKS_WITHOUT_PROGRESS = 10_000;
 
 export interface AzureBlobStoreOptions {
   /**
@@ -99,6 +100,9 @@ function assertEtag(etag: string, label: string): void {
   if (typeof etag !== "string" || etag.length === 0) {
     throw new BlobValidationError(`${label} must be a non-empty string.`);
   }
+  if (etag.trim() === "*") {
+    throw new BlobValidationError(`${label} must not be a wildcard.`);
+  }
 }
 
 function copyBytes(source: Uint8Array): Uint8Array {
@@ -119,8 +123,9 @@ async function readBody(
   }
 
   const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
   let total = 0;
+  let emptyChunksWithoutProgress = 0;
+  let bytes = new Uint8Array(0);
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -132,14 +137,42 @@ async function readBody(
           "Body stream chunks must be Uint8Array values.",
         );
       }
-      total += value.byteLength;
-      if (total > limitBytes) {
+      if (value.byteLength === 0) {
+        emptyChunksWithoutProgress += 1;
+        if (
+          emptyChunksWithoutProgress > MAX_EMPTY_BODY_CHUNKS_WITHOUT_PROGRESS
+        ) {
+          void reader.cancel().catch(() => {
+            /* validation error wins */
+          });
+          throw new BlobValidationError(
+            "Body stream produced too many empty chunks without progress.",
+          );
+        }
+        continue;
+      }
+      emptyChunksWithoutProgress = 0;
+      const nextTotal = total + value.byteLength;
+      if (nextTotal > limitBytes) {
         void reader.cancel().catch(() => {
           /* size error wins */
         });
         throw new BlobSizeLimitError(limitBytes);
       }
-      chunks.push(copyBytes(value));
+      if (bytes.byteLength < nextTotal) {
+        const nextCapacity = Math.min(
+          limitBytes,
+          Math.max(
+            nextTotal,
+            bytes.byteLength === 0 ? 16 * 1_024 : bytes.byteLength * 2,
+          ),
+        );
+        const grown = new Uint8Array(nextCapacity);
+        grown.set(bytes.subarray(0, total));
+        bytes = grown;
+      }
+      bytes.set(value, total);
+      total = nextTotal;
     }
   } catch (error) {
     if (
@@ -153,19 +186,13 @@ async function readBody(
     });
   }
 
-  if (chunks.length === 0) {
+  if (total === 0) {
     return new Uint8Array(0);
   }
-  if (chunks.length === 1) {
-    return chunks[0]!;
+  if (bytes.byteLength === total) {
+    return bytes;
   }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
+  return copyBytes(bytes.subarray(0, total));
 }
 
 function nodeStreamToWeb(
@@ -273,15 +300,18 @@ export function createAzureBlobStore(
   const createIfMissing = options.createContainerIfMissing !== false;
   const containerName = container.containerName;
   // Credential-free identity so SAS query strings never enter list cursors.
-  let endpoint = container.url;
+  let containerUrl: URL;
   try {
-    const parsed = new URL(container.url);
-    parsed.search = "";
-    parsed.hash = "";
-    endpoint = parsed.toString();
-  } catch {
-    // Fall back to the raw URL if it is not absolute.
+    containerUrl = new URL(container.url);
+  } catch (error) {
+    throw new BlobValidationError("containerClient.url must be absolute.", {
+      cause: error,
+    });
   }
+  containerUrl.search = "";
+  containerUrl.hash = "";
+  const endpoint = containerUrl.toString();
+  const containerPathPrefix = `${containerUrl.pathname.replace(/\/$/u, "")}/`;
   const backendId = `${container.accountName ?? "account"}|${endpoint}|${containerName}`;
   let ensureContainer: Promise<void> | undefined;
 
@@ -301,6 +331,28 @@ export function createAzureBlobStore(
       );
     }
     await ensureContainer;
+  }
+
+  function containedBlockBlobClient(key: string) {
+    const blob = container.getBlockBlobClient(key);
+    let blobUrl: URL;
+    try {
+      blobUrl = new URL(blob.url);
+    } catch (error) {
+      throw new BlobStoreError(
+        `Azure produced an invalid URL for ${JSON.stringify(key)}.`,
+        { cause: error },
+      );
+    }
+    if (
+      blobUrl.origin !== containerUrl.origin ||
+      !blobUrl.pathname.startsWith(containerPathPrefix)
+    ) {
+      throw new BlobStoreError(
+        `Azure produced a URL outside the configured container for ${JSON.stringify(key)}.`,
+      );
+    }
+    return blob;
   }
 
   return {
@@ -332,7 +384,7 @@ export function createAzureBlobStore(
       const bytes = await readBody(body, limitBytes);
 
       await ready();
-      const blob = container.getBlockBlobClient(key);
+      const blob = containedBlockBlobClient(key);
 
       const conditions =
         ifNoneMatch === "*"
@@ -409,7 +461,7 @@ export function createAzureBlobStore(
     async get(key) {
       assertValidBlobKey(key);
       await ready();
-      const blob = container.getBlockBlobClient(key);
+      const blob = containedBlockBlobClient(key);
       let download: BlobDownloadResponseParsed;
       try {
         download = await blob.download(0);
@@ -452,7 +504,7 @@ export function createAzureBlobStore(
     async head(key) {
       assertValidBlobKey(key);
       await ready();
-      const blob = container.getBlockBlobClient(key);
+      const blob = containedBlockBlobClient(key);
       try {
         const props = await blob.getProperties();
         return toObjectInfo(key, {
@@ -480,7 +532,7 @@ export function createAzureBlobStore(
         assertEtag(ifMatch, "ifMatch");
       }
       await ready();
-      const blob = container.getBlockBlobClient(key);
+      const blob = containedBlockBlobClient(key);
       try {
         await blob.delete(
           ifMatch === undefined ? undefined : { conditions: { ifMatch } },

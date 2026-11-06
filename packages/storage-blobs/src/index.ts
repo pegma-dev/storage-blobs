@@ -278,6 +278,7 @@ interface MemoryListCursor {
 }
 
 const textEncoder = new TextEncoder();
+const MAX_EMPTY_BODY_CHUNKS_WITHOUT_PROGRESS = 10_000;
 
 function assertWellFormedUnicode(value: string, label: string): void {
   for (let index = 0; index < value.length; index += 1) {
@@ -315,8 +316,7 @@ function hasDisallowedControl(value: string): boolean {
 }
 
 /**
- * Shared character/length rules for keys and list prefixes (no exact-key
- * exclusions such as `.` / `..`).
+ * Shared character/length rules for keys and list prefixes.
  */
 function assertBlobPathString(value: string, label: string): void {
   if (typeof value !== "string" || value.length === 0) {
@@ -334,10 +334,15 @@ function assertBlobPathString(value: string, label: string): void {
     );
   }
   // Azure Blob rejects names with more than 254 path segments.
-  const segments = value.split("/").length;
-  if (segments > MAX_BLOB_KEY_SEGMENTS) {
+  const segments = value.split("/");
+  if (segments.length > MAX_BLOB_KEY_SEGMENTS) {
     throw new BlobValidationError(
       `${label} may have at most ${MAX_BLOB_KEY_SEGMENTS} path segments.`,
+    );
+  }
+  if (segments.some((segment) => segment === "." || segment === "..")) {
+    throw new BlobValidationError(
+      `${label} must not contain dot path segments.`,
     );
   }
 }
@@ -381,23 +386,17 @@ function copyBytes(source: Uint8Array): Uint8Array {
  * can honour.
  *
  * Keys are non-empty, at most {@link MAX_BLOB_KEY_BYTES} UTF-8 bytes, free of
- * C0 controls and DEL, well-formed Unicode, and must not be `.` or `..`.
+ * C0 controls and DEL, well-formed Unicode, and free of dot path segments.
  */
 export function assertValidBlobKey(key: string): void {
   assertBlobPathString(key, "Blob key");
-  if (key === "." || key === "..") {
-    throw new BlobValidationError(
-      `Blob key ${JSON.stringify(key)} is not allowed.`,
-    );
-  }
 }
 
 /**
  * Validates a list prefix. Empty string means “no prefix” and is rejected here
  * so callers use `undefined` instead of `""`.
  *
- * Unlike object keys, the exact strings `.` and `..` are allowed as prefixes
- * so keys such as `.hidden` remain listable.
+ * A trailing slash is allowed, but `.` and `..` path segments are not.
  */
 export function assertValidBlobPrefix(prefix: string): void {
   assertBlobPathString(prefix, "List prefix");
@@ -546,6 +545,9 @@ function assertEtag(etag: string, label: string): void {
       `${label} must not contain control characters.`,
     );
   }
+  if (etag.trim() === "*") {
+    throw new BlobValidationError(`${label} must not be a wildcard.`);
+  }
 }
 
 function encodeMemoryListCursor(storeId: string, afterKey: string): string {
@@ -602,8 +604,9 @@ async function readBody(
   }
 
   const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
   let total = 0;
+  let emptyChunksWithoutProgress = 0;
+  let bytes = new Uint8Array(0);
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -615,16 +618,44 @@ async function readBody(
           "Body stream chunks must be Uint8Array values.",
         );
       }
-      total += value.byteLength;
-      if (total > limitBytes) {
+      if (value.byteLength === 0) {
+        emptyChunksWithoutProgress += 1;
+        if (
+          emptyChunksWithoutProgress > MAX_EMPTY_BODY_CHUNKS_WITHOUT_PROGRESS
+        ) {
+          void reader.cancel().catch(() => {
+            // Ignore cancel failures; validation is what the caller needs.
+          });
+          throw new BlobValidationError(
+            "Body stream produced too many empty chunks without progress.",
+          );
+        }
+        continue;
+      }
+      emptyChunksWithoutProgress = 0;
+      const nextTotal = total + value.byteLength;
+      if (nextTotal > limitBytes) {
         // Do not await cancel: a hung cancel hook must not block the size error.
         void reader.cancel().catch(() => {
           // Ignore cancel failures; the size error is what the caller needs.
         });
         throw new BlobSizeLimitError(limitBytes);
       }
+      if (bytes.byteLength < nextTotal) {
+        const nextCapacity = Math.min(
+          limitBytes,
+          Math.max(
+            nextTotal,
+            bytes.byteLength === 0 ? 16 * 1_024 : bytes.byteLength * 2,
+          ),
+        );
+        const grown = new Uint8Array(nextCapacity);
+        grown.set(bytes.subarray(0, total));
+        bytes = grown;
+      }
       // Copy immediately: streams may reuse one scratch buffer for every chunk.
-      chunks.push(copyBytes(value));
+      bytes.set(value, total);
+      total = nextTotal;
     }
   } catch (error) {
     if (
@@ -638,19 +669,13 @@ async function readBody(
     });
   }
 
-  if (chunks.length === 0) {
+  if (total === 0) {
     return new Uint8Array(0);
   }
-  if (chunks.length === 1) {
-    return copyBytes(chunks[0]!);
+  if (bytes.byteLength === total) {
+    return bytes;
   }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
+  return copyBytes(bytes.subarray(0, total));
 }
 
 function bytesToStream(bytes: Uint8Array): ReadableStream<Uint8Array> {

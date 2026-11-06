@@ -1,7 +1,15 @@
 import { spawnSync } from "node:child_process";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { existsSync } from "node:fs";
 import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import {
+  lstat,
   mkdtemp,
   mkdir,
   readFile,
@@ -15,6 +23,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPOSITORY_URL = "git+https://github.com/pegma-dev/storage-blobs.git";
+const NPM_REGISTRY = "https://registry.npmjs.org/";
 const REVIEWED_PNPM_VERSION = "10.34.5";
 const STABLE_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 
@@ -121,8 +130,58 @@ export function resolveNpmCli() {
   );
 }
 
+function isolatedNpmEnvironment(directory) {
+  const allowed = new Set([
+    "PATH",
+    "HOME",
+    "USERPROFILE",
+    "SystemRoot",
+    "SYSTEMROOT",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "CI",
+    "ComSpec",
+    "COMSPEC",
+    "PATHEXT",
+    "WINDIR",
+  ]);
+  const env = {};
+  for (const [name, value] of Object.entries(process.env)) {
+    if (
+      value !== undefined &&
+      (allowed.has(name) ||
+        name.startsWith("GITHUB_") ||
+        name.startsWith("ACTIONS_ID_TOKEN_") ||
+        name.startsWith("RUNNER_"))
+    ) {
+      env[name] = value;
+    }
+  }
+  const userConfig = join(directory, "user.npmrc");
+  const globalConfig = join(directory, "global.npmrc");
+  writeFileSync(userConfig, "", { mode: 0o600 });
+  writeFileSync(globalConfig, "", { mode: 0o600 });
+  chmodSync(userConfig, 0o600);
+  chmodSync(globalConfig, 0o600);
+  env.NPM_CONFIG_USERCONFIG = userConfig;
+  env.NPM_CONFIG_GLOBALCONFIG = globalConfig;
+  return env;
+}
+
 function runNpm(arguments_, options = {}) {
-  return run(process.execPath, [resolveNpmCli(), ...arguments_], options);
+  const directory = mkdtempSync(join(tmpdir(), "storage-blobs-npm-"));
+  try {
+    const cwd = options.freshCwd ? join(directory, "cwd") : options.cwd;
+    if (options.freshCwd) mkdirSync(cwd);
+    return run(process.execPath, [resolveNpmCli(), ...arguments_], {
+      ...options,
+      cwd,
+      env: isolatedNpmEnvironment(directory),
+    });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 function runPnpm(arguments_, options = {}) {
@@ -138,9 +197,26 @@ function gitCommand() {
 
 function hashTarball(bytes) {
   return {
+    sha256: createHash("sha256").update(bytes).digest("hex"),
     shasum: createHash("sha1").update(bytes).digest("hex"),
     integrity: `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
   };
+}
+
+function parsePackResult(output) {
+  for (
+    let start = output.indexOf("[");
+    start !== -1;
+    start = output.indexOf("[", start + 1)
+  ) {
+    try {
+      const parsed = JSON.parse(output.slice(start));
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      // Lifecycle output may precede npm's JSON result.
+    }
+  }
+  fail("npm pack did not return a JSON result");
 }
 
 export function digestManifest(bytes) {
@@ -182,12 +258,15 @@ export function validateReleaseTag(options = {}) {
   const releaseTag = options.releaseTag ?? process.env.RELEASE_TAG;
   const expectedReleaseCommit =
     options.expectedReleaseCommit ?? process.env.RELEASE_COMMIT;
-  if (releaseTag === undefined || !/^v\d+\.\d+\.\d+$/u.test(releaseTag)) {
+  if (
+    releaseTag === undefined ||
+    !/^v(0\.[1-9][0-9]*|[1-9][0-9]*\.[0-9]+)\.[0-9]+$/u.test(releaseTag)
+  ) {
     fail("a stable release tag is required");
   }
   if (
     expectedReleaseCommit === undefined ||
-    !/^[0-9a-f]{40,64}$/u.test(expectedReleaseCommit)
+    !/^[0-9a-f]{40}$/u.test(expectedReleaseCommit)
   ) {
     fail("an exact release event commit is required");
   }
@@ -594,6 +673,50 @@ function verifyPackedFiles(manifest, files) {
   }
 }
 
+function tarballName(name, version) {
+  return `${name.slice(1).replace("/", "-")}-${version}.tgz`;
+}
+
+async function removeBuildState(directory) {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name !== "node_modules") await removeBuildState(path);
+      continue;
+    }
+    if (entry.isFile() && entry.name.endsWith(".tsbuildinfo")) {
+      await rm(path, { force: true });
+    }
+  }
+}
+
+async function cleanWorkspaceBuildOutputs(root) {
+  for (const { directory } of RELEASE_PACKAGES) {
+    const packageDirectory = join(root, "packages", directory);
+    await rm(join(packageDirectory, "dist"), { recursive: true, force: true });
+    await removeBuildState(packageDirectory);
+  }
+}
+
+async function assertReleaseInventory(directory, records) {
+  const expected = [
+    "package-manifest.json",
+    ...records.map((record) => record.tarball),
+  ].sort();
+  const entries = await readdir(directory, { withFileTypes: true });
+  const actual = entries.map(({ name }) => name).sort();
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    fail("release output inventory does not match the prepared package list");
+  }
+  for (const entry of entries) {
+    const path = join(directory, entry.name);
+    const details = await lstat(path);
+    if (!entry.isFile() || entry.isSymbolicLink() || !details.isFile()) {
+      fail(`release output entry must be a regular file: ${entry.name}`);
+    }
+  }
+}
+
 async function smokeTestTarball(tarball, manifest, siblingTarballs = []) {
   const directory = await mkdtemp(
     join(tmpdir(), "storage-blobs-release-smoke-"),
@@ -617,7 +740,7 @@ async function smokeTestTarball(tarball, manifest, siblingTarballs = []) {
       ],
       { cwd: directory, capture: true },
     );
-    for (const key of Object.keys(manifest.exports)) {
+    for (const key of manifest.exports) {
       const specifier =
         key === "." ? manifest.name : `${manifest.name}${key.slice(1)}`;
       run(
@@ -643,21 +766,31 @@ export async function prepareRelease(options = {}) {
   }).stdout.trim();
   const output = resolve(root, options.output ?? ".release");
   await mkdir(output, { recursive: true });
+  const outputDetails = await lstat(output);
+  if (!outputDetails.isDirectory() || outputDetails.isSymbolicLink()) {
+    fail(`release output must be a regular directory: ${output}`);
+  }
   if ((await readdir(output)).length !== 0) {
     fail(`release output directory must be empty: ${output}`);
   }
 
+  await cleanWorkspaceBuildOutputs(root);
   runPnpm(["run", "build"], { cwd: root });
 
-  // Pack every package before smoke tests so adapters can install sibling
-  // tarballs instead of fetching unpublished versions from the registry.
   const packedEntries = [];
   for (const entry of packages) {
     const result = runNpm(
-      ["pack", entry.packageDirectory, "--json", "--pack-destination", output],
+      [
+        "pack",
+        entry.packageDirectory,
+        "--json",
+        "--silent",
+        "--pack-destination",
+        output,
+      ],
       { cwd: root, capture: true },
     );
-    const [packed] = JSON.parse(result.stdout);
+    const [packed] = parsePackResult(result.stdout);
     if (
       packed?.name !== entry.manifest.name ||
       packed?.version !== entry.manifest.version ||
@@ -682,16 +815,13 @@ export async function prepareRelease(options = {}) {
 
   const preparedPackages = [];
   for (const { entry, packed, tarballPath, hashes } of packedEntries) {
-    const siblings = packedEntries
-      .filter((candidate) => candidate.tarballPath !== tarballPath)
-      .map((candidate) => candidate.tarballPath);
-    await smokeTestTarball(tarballPath, entry.manifest, siblings);
     preparedPackages.push({
       name: entry.manifest.name,
       version: entry.manifest.version,
       tarball: basename(tarballPath),
+      sha256: hashes.sha256,
       integrity: hashes.integrity,
-      shasum: hashes.shasum,
+      exports: Object.keys(entry.manifest.exports).sort(),
       files: packed.files
         .map(({ path, size }) => ({ path, size }))
         .sort((left, right) => left.path.localeCompare(right.path)),
@@ -699,7 +829,7 @@ export async function prepareRelease(options = {}) {
   }
 
   const prepared = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     gitCommit,
     releaseTag: releaseTag ?? null,
     packages: preparedPackages,
@@ -710,6 +840,17 @@ export async function prepareRelease(options = {}) {
     "utf8",
   );
   await writeFile(manifestPath, manifestBytes);
+  await assertReleaseInventory(output, preparedPackages);
+
+  if (!options.skipSmoke) {
+    for (const record of preparedPackages) {
+      const tarballPath = join(output, record.tarball);
+      const siblings = preparedPackages
+        .filter((candidate) => candidate.tarball !== record.tarball)
+        .map((candidate) => join(output, candidate.tarball));
+      await smokeTestTarball(tarballPath, record, siblings);
+    }
+  }
   return {
     manifestPath,
     manifest: prepared,
@@ -717,12 +858,31 @@ export async function prepareRelease(options = {}) {
   };
 }
 
+export async function smokePreparedRelease(options = {}) {
+  const path = resolve(options.manifest ?? ".release/package-manifest.json");
+  const prepared = await verifyPreparedManifest(
+    path,
+    options.expectedManifestDigest ?? process.env.RELEASE_MANIFEST_DIGEST,
+  );
+  for (const record of prepared.packages) {
+    const tarballPath = join(dirname(path), record.tarball);
+    const siblings = prepared.packages
+      .filter((candidate) => candidate.tarball !== record.tarball)
+      .map((candidate) => join(dirname(path), candidate.tarball));
+    await smokeTestTarball(tarballPath, record, siblings);
+  }
+}
+
 function queryRegistryIntegrity(name, version) {
   const spec = `${name}@${version}`;
-  const result = runNpm(["view", spec, "dist.integrity", "--json"], {
-    capture: true,
-    allowFailure: true,
-  });
+  const result = runNpm(
+    ["view", spec, "dist.integrity", "--json", "--registry", NPM_REGISTRY],
+    {
+      capture: true,
+      allowFailure: true,
+      freshCwd: true,
+    },
+  );
   if (result.status === 0) {
     const integrity = JSON.parse(result.stdout);
     if (typeof integrity !== "string" || integrity.length === 0) {
@@ -776,8 +936,13 @@ async function verifyPreparedManifest(path, expectedManifestDigest) {
   const prepared = JSON.parse(manifestBytes.toString("utf8"));
   const records = prepared.packages;
   if (
-    prepared.schemaVersion !== 2 ||
-    !/^[0-9a-f]{40,64}$/u.test(prepared.gitCommit) ||
+    Object.keys(prepared).sort().join(",") !==
+      "gitCommit,packages,releaseTag,schemaVersion" ||
+    prepared.schemaVersion !== 3 ||
+    !/^[0-9a-f]{40}$/u.test(prepared.gitCommit) ||
+    !/^v(0\.[1-9][0-9]*|[1-9][0-9]*\.[0-9]+)\.[0-9]+$/u.test(
+      prepared.releaseTag,
+    ) ||
     !Array.isArray(records) ||
     records.length !== RELEASE_PACKAGES.length
   ) {
@@ -790,23 +955,31 @@ async function verifyPreparedManifest(path, expectedManifestDigest) {
   if (!safeEqual(currentCommit, prepared.gitCommit)) {
     fail("prepared package manifest commit does not match the checkout");
   }
+  await assertReleaseInventory(dirname(path), records);
 
   for (let index = 0; index < RELEASE_PACKAGES.length; index += 1) {
     const definition = RELEASE_PACKAGES[index];
     const record = records[index];
     if (
+      Object.keys(record ?? {})
+        .sort()
+        .join(",") !== "exports,files,integrity,name,sha256,tarball,version" ||
       prepared.releaseTag !== `v${record?.version}` ||
       record?.name !== definition.name ||
       !STABLE_SEMVER.test(record.version) ||
+      !/^[0-9a-f]{64}$/u.test(record.sha256) ||
       typeof record.integrity !== "string" ||
-      typeof record.shasum !== "string" ||
+      !/^sha512-[A-Za-z0-9+/]+={0,2}$/u.test(record.integrity) ||
+      !Array.isArray(record.exports) ||
+      record.exports.length === 0 ||
+      record.exports.some(
+        (entry) => typeof entry !== "string" || !entry.startsWith("."),
+      ) ||
       !Array.isArray(record.files)
     ) {
       fail(`prepared package record is invalid for ${definition.name}`);
     }
-    const expectedTarball = `${definition.name
-      .slice(1)
-      .replace("/", "-")}-${record.version}.tgz`;
+    const expectedTarball = tarballName(definition.name, record.version);
     if (record.tarball !== expectedTarball) {
       fail(`prepared tarball name is invalid for ${definition.name}`);
     }
@@ -816,8 +989,17 @@ async function verifyPreparedManifest(path, expectedManifestDigest) {
     }
     const hashes = hashTarball(await readFile(tarball));
     if (
+      !safeEqual(hashes.sha256, record.sha256) ||
       !safeEqual(hashes.integrity, record.integrity) ||
-      !safeEqual(hashes.shasum, record.shasum)
+      record.files.some(
+        (file) =>
+          typeof file !== "object" ||
+          file === null ||
+          Object.keys(file).sort().join(",") !== "path,size" ||
+          typeof file.path !== "string" ||
+          !Number.isSafeInteger(file.size) ||
+          file.size < 0,
+      )
     ) {
       fail(`prepared tarball has changed for ${definition.name}`);
     }
@@ -846,7 +1028,7 @@ export async function publishPreparedRelease(options = {}) {
   }
   if (
     expectedCommit === undefined ||
-    !/^[0-9a-f]{40,64}$/u.test(expectedCommit) ||
+    !/^[0-9a-f]{40}$/u.test(expectedCommit) ||
     !safeEqual(expectedCommit, prepared.gitCommit)
   ) {
     fail("prepared package manifest must match the release event commit");
@@ -870,8 +1052,11 @@ export async function publishPreparedRelease(options = {}) {
         "--access",
         "public",
         "--provenance",
+        "--ignore-scripts",
+        "--registry",
+        NPM_REGISTRY,
       ],
-      { cwd: dirname(path) },
+      { freshCwd: true },
     );
     confirmRegistryIntegrity(record);
   }
@@ -892,6 +1077,10 @@ export function parseArguments(arguments_) {
     }
     if (argument === "--require-release-tag") {
       options.requireReleaseTag = true;
+      continue;
+    }
+    if (argument === "--skip-smoke") {
+      options.skipSmoke = true;
       continue;
     }
     const key =
@@ -933,11 +1122,18 @@ async function main() {
     process.stdout.write(`Prepared manifest SHA-256 ${manifestDigest}.\n`);
     return;
   }
+  if (command === "smoke") {
+    await smokePreparedRelease(options);
+    process.stdout.write(
+      "Prepared release packages passed consumer smoke tests.\n",
+    );
+    return;
+  }
   if (command === "publish") {
     await publishPreparedRelease(options);
     return;
   }
-  fail("usage: release-packages.mjs <check|pack|publish> [options]");
+  fail("usage: release-packages.mjs <check|pack|smoke|publish> [options]");
 }
 
 const isMain =

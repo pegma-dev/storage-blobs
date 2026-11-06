@@ -439,18 +439,34 @@ export const conformanceCases: readonly ConformanceCase[] = [
     );
   }),
 
-  testCase("rejects the exact keys . and ..", async (store) => {
-    for (const key of [".", ".."]) {
-      await assert.rejects(
-        () => store.put(key, textBytes("x")),
-        (error: unknown) => error instanceof BlobValidationError,
-      );
-      await assert.rejects(
-        () => store.get(key),
-        (error: unknown) => error instanceof BlobValidationError,
-      );
-    }
-  }),
+  testCase(
+    "rejects keys and prefixes with dot path segments",
+    async (store) => {
+      const keys = [".", "..", "./a", "../a", "a/./b", "a/../b", "a/.", "a/.."];
+      for (const key of keys) {
+        await assert.rejects(
+          () => store.put(key, textBytes("x")),
+          (error: unknown) => error instanceof BlobValidationError,
+        );
+        await assert.rejects(
+          () => store.get(key),
+          (error: unknown) => error instanceof BlobValidationError,
+        );
+        await assert.rejects(
+          () => store.head(key),
+          (error: unknown) => error instanceof BlobValidationError,
+        );
+        await assert.rejects(
+          () => store.delete(key),
+          (error: unknown) => error instanceof BlobValidationError,
+        );
+        await assert.rejects(
+          () => store.list({ prefix: key, limit: 1 }),
+          (error: unknown) => error instanceof BlobValidationError,
+        );
+      }
+    },
+  ),
 
   testCase("rejects a key containing a control character", async (store) => {
     const key = `bad${String.fromCharCode(0)}key`;
@@ -647,6 +663,41 @@ export const conformanceCases: readonly ConformanceCase[] = [
     },
   ),
 
+  testCase("put ignores empty stream chunks around data", async (store) => {
+    const chunks = [
+      new Uint8Array(0),
+      textBytes("left"),
+      new Uint8Array(0),
+      new Uint8Array(0),
+      textBytes("-right"),
+      new Uint8Array(0),
+    ];
+    const put = await store.put(
+      "streams/empty-chunks",
+      multiChunkStream(chunks),
+    );
+    assert.equal(put.ok, true);
+    const got = await store.get("streams/empty-chunks");
+    assert.ok(got);
+    assertBytesEqual(await readAll(got.body), textBytes("left-right"));
+  }),
+
+  testCase("put rejects excessive empty stream chunks", async (store) => {
+    let reads = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        reads += 1;
+        controller.enqueue(new Uint8Array(0));
+      },
+    });
+    await assert.rejects(
+      () => store.put("streams/no-progress", stream),
+      (error: unknown) => error instanceof BlobValidationError,
+    );
+    assert.equal(reads > 10_000, true);
+    assert.equal(await store.head("streams/no-progress"), null);
+  }),
+
   testCase(
     "put from a large multi-chunk stream preserves exact bytes",
     async (store) => {
@@ -722,6 +773,19 @@ export const conformanceCases: readonly ConformanceCase[] = [
       () => store.delete("cond/bad-match", { ifMatch: "" }),
       (error: unknown) => error instanceof BlobValidationError,
     );
+  }),
+
+  testCase("rejects wildcard ifMatch values", async (store) => {
+    for (const ifMatch of ["*", " * "]) {
+      await assert.rejects(
+        () => store.put("cond/wildcard", textBytes("x"), { ifMatch }),
+        (error: unknown) => error instanceof BlobValidationError,
+      );
+      await assert.rejects(
+        () => store.delete("cond/wildcard", { ifMatch }),
+        (error: unknown) => error instanceof BlobValidationError,
+      );
+    }
   }),
 
   testCase("accepts a key at the maximum UTF-8 byte length", async (store) => {

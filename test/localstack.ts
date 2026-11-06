@@ -20,7 +20,7 @@ export const LOCALSTACK_SECRET_KEY = "test";
 export const LOCALSTACK_ENDPOINT = `http://127.0.0.1:${LOCALSTACK_PORT}`;
 
 const CONTAINER_NAME = `pegma-storage-blobs-localstack-${process.pid}`;
-const IMAGE = "localstack/localstack:4.3";
+const IMAGE = "localstack/localstack:4.3.0";
 
 let startedContainer = false;
 
@@ -118,7 +118,7 @@ export async function setup(): Promise<void> {
     "--name",
     CONTAINER_NAME,
     "-p",
-    `${LOCALSTACK_PORT}:4566`,
+    `127.0.0.1:${LOCALSTACK_PORT}:4566`,
     "-e",
     "SERVICES=s3",
     "-e",
