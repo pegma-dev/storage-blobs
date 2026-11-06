@@ -40,24 +40,35 @@ After that pull request is merged, create a signed annotated tag at the exact
 create the GitHub release with `--verify-tag`. Do not let GitHub create the tag
 and never move or recreate a release tag.
 
-The release workflow verifies that the tag:
+Before checking out release source or running repository code, the workflow
+authenticates the tag in a fresh bare repository and verifies that it:
 
-- is a stable annotated `vX.Y.Z` tag signed by an allowed signer;
-- matches a public package version in the release inventory;
+- is a signed annotated tag in the stable package series (`v0.MINOR.PATCH`
+  with `MINOR >= 1`, or `vMAJOR.MINOR.PATCH` with `MAJOR >= 1`; `v0.0.x` is
+  not a release tag);
 - points to the checkout and the GitHub release-event commit; and
 - is contained in `origin/main`.
 
-Its preparation job has no OIDC permission. It enables Corepack for the
-reviewed pnpm version, installs the reviewed `npm@11.18.0` used to pack and
-talk to the registry, runs the full gate against `pnpm-lock.yaml` without
-dependency caching, builds and packs once, smoke-tests the tarball from a
-clean consumer, records its SHA-1 and SHA-512 integrity, and uploads the
-exact prepared artifact.
+Only after those checks does preparation check out the exact release-event
+commit and confirm that the tag matches the shared public package version. Its
+preparation job has no OIDC permission. It enables Corepack for the reviewed
+pnpm version, installs the reviewed `npm@11.18.0`, runs the full gate against
+`pnpm-lock.yaml` without dependency caching, removes prior build outputs,
+builds and packs once, records SHA-256 and SHA-512 values, enforces an exact
+regular-file inventory, and uploads the sealed artifact immediately.
 
-Only the `npm-publish` job receives `id-token: write`. It installs no
-dependencies and does not download pnpm. It verifies the prepared manifest
-and tarball hashes against the release commit, and publishes that tarball
-with npm provenance.
+A separate unprivileged smoke job downloads a copy, verifies the manifest
+digest recorded by preparation, installs the tarballs in a clean consumer with
+package scripts disabled, and imports every exported entry point. Registry
+dependencies resolved by that consumer cannot change the artifact used for
+publication.
+
+Only the `npm-publish` job receives `id-token: write`. It checks out no source,
+installs no dependencies, and does not download pnpm. Workflow-owned logic
+re-authenticates the tag in a temporary bare repository, verifies the sealed
+manifest and exact artifact inventory, and publishes dependency-ordered
+tarballs from fresh temporary working directories with npm provenance and
+package scripts disabled.
 
 ## Safe retry
 

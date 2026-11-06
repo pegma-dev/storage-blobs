@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   RELEASE_PACKAGES,
+  RELEASE_MANIFEST_SCHEMA_VERSION,
+  REVIEWED_NPM,
   REVIEWED_PNPM,
+  STABLE_RELEASE_TAG,
   assertPnpmLockfileSynchronized,
   decidePublication,
   digestManifest,
@@ -43,6 +46,10 @@ describe("release package metadata", () => {
     });
   });
 
+  it("parses preparation without consumer smoke imports", () => {
+    expect(parseArguments(["--skip-smoke"])).toEqual({ skipSmoke: true });
+  });
+
   it("parses the expected prepared manifest digest", () => {
     expect(
       parseArguments(["--expected-manifest-digest", "a".repeat(64)]),
@@ -59,6 +66,59 @@ describe("release package metadata", () => {
       "@pegma/storage-cloudflare-r2",
       "@pegma/storage-s3",
     ]);
+  });
+
+  it("keeps workflow-owned publication constants aligned", () => {
+    const workflow = readFileSync(
+      join(process.cwd(), ".github", "workflows", "publish.yml"),
+      "utf8",
+    );
+    const packageBlock = /const packages = \[([\s\S]*?)\];/u.exec(
+      workflow,
+    )?.[1];
+    expect(packageBlock).toBeDefined();
+    const workflowPackages = [
+      ...(packageBlock ?? "").matchAll(/"(@pegma\/[^"]+)"/gu),
+    ].map((match) => match[1]);
+    expect(workflowPackages).toEqual(RELEASE_PACKAGES.map(({ name }) => name));
+
+    const schemaVersion = /manifest\.schemaVersion !== (\d+)/u.exec(
+      workflow,
+    )?.[1];
+    expect(schemaVersion).toBe(String(RELEASE_MANIFEST_SCHEMA_VERSION));
+    expect(workflow).toContain(`npmVersion !== "${REVIEWED_NPM.version}"`);
+    for (const name of ["ComSpec", "COMSPEC", "PATHEXT", "WINDIR"]) {
+      expect(workflow).toContain(`"${name}"`);
+    }
+
+    const tagPatterns = [
+      ...workflow.matchAll(
+        /if \[\[ ! "\$\{RELEASE_TAG\}" =~ ([^ ]+) \]\]; then/gu,
+      ),
+    ].map((match) => match[1]);
+    expect(tagPatterns).toHaveLength(2);
+    expect(new Set(tagPatterns).size).toBe(1);
+    expect(tagPatterns[0]).toBe(STABLE_RELEASE_TAG.source);
+    const installedNpmVersions = [
+      ...workflow.matchAll(/npm install --global npm@([0-9.]+)/gu),
+    ].map((match) => match[1]);
+    expect(installedNpmVersions).toEqual([
+      REVIEWED_NPM.version,
+      REVIEWED_NPM.version,
+    ]);
+    for (const marker of [
+      'hash(manifestBytes, "sha256", "hex")',
+      'hash(bytes, "sha512", "base64")',
+      '"--provenance"',
+      '"--ignore-scripts"',
+      '"--registry"',
+      "/\\bE404\\b/.test(output)",
+      "expectedInventory.sort()",
+    ]) {
+      expect(workflow).toContain(marker);
+    }
+    expect(workflow.match(/verify-tag/gu)).toHaveLength(2);
+    expect(workflow.match(/merge-base --is-ancestor/gu)).toHaveLength(2);
   });
 
   it("validates package manifests and the lockfile together", async () => {
@@ -214,6 +274,15 @@ importers:
 });
 
 describe("release source authentication", () => {
+  it("rejects release tags outside the stable package series", () => {
+    expect(() =>
+      validateReleaseTag({
+        releaseTag: "v0.0.1",
+        expectedReleaseCommit: "a".repeat(40),
+      }),
+    ).toThrow("stable release tag");
+  });
+
   it("accepts only an approved signed annotated tag at the event commit", () => {
     const root = mkdtempSync(join(tmpdir(), "storage-blobs-release-tag-"));
     try {
@@ -248,20 +317,20 @@ describe("release source authentication", () => {
       run(git, ["config", "user.signingkey", signingKey], root);
       run(git, ["config", "gpg.ssh.allowedSignersFile", allowedSigners], root);
 
-      run(git, ["tag", "--sign", "v0.0.0", "--message", "signed"], root);
+      run(git, ["tag", "--sign", "v0.1.0", "--message", "signed"], root);
       expect(
         validateReleaseTag({
           root,
-          releaseTag: "v0.0.0",
+          releaseTag: "v0.1.0",
           expectedReleaseCommit: releaseCommit,
         }),
-      ).toEqual({ headCommit: releaseCommit, releaseTag: "v0.0.0" });
+      ).toEqual({ headCommit: releaseCommit, releaseTag: "v0.1.0" });
 
-      run(git, ["tag", "v0.0.1"], root);
+      run(git, ["tag", "v0.1.1"], root);
       expect(() =>
         validateReleaseTag({
           root,
-          releaseTag: "v0.0.1",
+          releaseTag: "v0.1.1",
           expectedReleaseCommit: releaseCommit,
         }),
       ).toThrow("annotated tag object");
@@ -273,7 +342,7 @@ describe("release source authentication", () => {
           "commit.gpgsign=false",
           "tag",
           "--annotate",
-          "v0.0.2",
+          "v0.1.2",
           "--message",
           "unsigned",
         ],
@@ -282,7 +351,7 @@ describe("release source authentication", () => {
       expect(() =>
         validateReleaseTag({
           root,
-          releaseTag: "v0.0.2",
+          releaseTag: "v0.1.2",
           expectedReleaseCommit: releaseCommit,
         }),
       ).toThrow("not valid for an approved signer");
@@ -291,7 +360,7 @@ describe("release source authentication", () => {
     }
   });
 
-  it("keeps preparation outside the OIDC-enabled publisher job", () => {
+  it("keeps preparation and consumer smoke outside the publisher job", () => {
     const workflow = readFileSync(
       join(process.cwd(), ".github", "workflows", "publish.yml"),
       "utf8",
@@ -302,27 +371,42 @@ describe("release source authentication", () => {
     const header = workflow.slice(0, jobsIndex);
     const jobs = workflow.slice(jobsIndex + jobsMarker.length);
     const prepareStart = jobs.indexOf("  prepare:");
+    const smokeStart = jobs.indexOf("\n  smoke:");
     const publishStart = jobs.indexOf("\n  publish:");
     expect(header).not.toContain("id-token: write");
     expect(prepareStart).toBeGreaterThanOrEqual(0);
-    expect(publishStart).toBeGreaterThan(prepareStart);
-    const prepare = jobs.slice(prepareStart, publishStart);
+    expect(smokeStart).toBeGreaterThan(prepareStart);
+    expect(publishStart).toBeGreaterThan(smokeStart);
+    const prepare = jobs.slice(prepareStart, smokeStart);
+    const smoke = jobs.slice(smokeStart, publishStart);
     const publish = jobs.slice(publishStart);
     expect(prepare).not.toContain("id-token: write");
+    expect(smoke).not.toContain("id-token: write");
     expect(publish).toContain("id-token: write");
     expect(publish).not.toContain("pnpm install");
     expect(publish).not.toContain("npm ci");
     expect(publish).not.toContain("npm install");
     expect(publish).not.toContain("pnpm");
     expect(publish).not.toContain("corepack");
-    expect(publish).toContain("node scripts/release-packages.mjs publish");
+    expect(publish).not.toContain("actions/checkout");
+    expect(publish).not.toContain("scripts/release-packages.mjs");
+    expect(publish).toContain(
+      'script_path="${RUNNER_TEMP}/publish-release.mjs"',
+    );
+    expect(prepare).toContain("--skip-smoke");
+    expect(prepare).toContain("include-hidden-files: false");
+    expect(prepare).toContain("path: ${{ steps.manifest.outputs.files }}");
+    expect(prepare).not.toContain("path: .release/");
+    expect(smoke).toContain("release-packages.mjs smoke");
     expect(workflow).not.toContain("workflow_dispatch");
     expect(workflow).toContain("retention-days: 30");
   });
 });
 
 describe("prepared manifest anchoring", () => {
-  const manifestBytes = '{"schemaVersion":2}\n';
+  const manifestBytes = `${JSON.stringify({
+    schemaVersion: RELEASE_MANIFEST_SCHEMA_VERSION,
+  })}\n`;
   const digest = digestManifest(manifestBytes);
 
   it("accepts the digest recorded by the preparation job", () => {
@@ -334,9 +418,12 @@ describe("prepared manifest anchoring", () => {
   });
 
   it("rejects a manifest replaced alongside its tarballs", () => {
-    expect(() =>
-      verifyManifestDigest('{"schemaVersion":2} \n', digest),
-    ).toThrow("does not match the digest recorded by the preparation job");
+    const replacement = `${JSON.stringify({
+      schemaVersion: RELEASE_MANIFEST_SCHEMA_VERSION,
+    })} \n`;
+    expect(() => verifyManifestDigest(replacement, digest)).toThrow(
+      "does not match the digest recorded by the preparation job",
+    );
   });
 
   it("refuses to publish without a usable expected digest", () => {
@@ -364,10 +451,12 @@ describe("prepared manifest anchoring", () => {
     expect(jobsIndex).toBeGreaterThanOrEqual(0);
     const jobs = workflow.slice(jobsIndex + jobsMarker.length);
     const prepareStart = jobs.indexOf("  prepare:");
+    const smokeStart = jobs.indexOf("\n  smoke:");
     const publishStart = jobs.indexOf("\n  publish:");
     expect(prepareStart).toBeGreaterThanOrEqual(0);
+    expect(smokeStart).toBeGreaterThan(prepareStart);
     expect(publishStart).toBeGreaterThan(prepareStart);
-    const prepare = jobs.slice(prepareStart, publishStart);
+    const prepare = jobs.slice(prepareStart, smokeStart);
     const publish = jobs.slice(publishStart);
     expect(prepare).toContain(
       "manifest-digest: ${{ steps.manifest.outputs.digest }}",
@@ -375,7 +464,10 @@ describe("prepared manifest anchoring", () => {
     expect(publish).toContain(
       "RELEASE_MANIFEST_DIGEST: ${{ needs.prepare.outputs.manifest-digest }}",
     );
-    expect(publish).toContain("--expected-manifest-digest");
+    expect(publish).toContain("RELEASE_MANIFEST_DIGEST");
+    expect(prepare).toContain(
+      "artifact-digest: ${{ steps.upload.outputs.artifact-digest }}",
+    );
   });
 });
 

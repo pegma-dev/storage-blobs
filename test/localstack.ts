@@ -20,7 +20,7 @@ export const LOCALSTACK_SECRET_KEY = "test";
 export const LOCALSTACK_ENDPOINT = `http://127.0.0.1:${LOCALSTACK_PORT}`;
 
 const CONTAINER_NAME = `pegma-storage-blobs-localstack-${process.pid}`;
-const IMAGE = "localstack/localstack:4.3";
+const IMAGE = "localstack/localstack:4.3.0";
 
 let startedContainer = false;
 
@@ -103,7 +103,14 @@ function runDocker(args: string[]): Promise<{
 
 export async function setup(): Promise<void> {
   if (await portAccepting(LOCALSTACK_PORT)) {
-    await waitForS3Ready(30_000);
+    try {
+      await waitForS3Ready(30_000);
+    } catch (error) {
+      throw new Error(
+        `Port ${LOCALSTACK_PORT} is already in use by a service that is not a ready LocalStack S3 instance.`,
+        { cause: error },
+      );
+    }
     return;
   }
 
@@ -118,7 +125,7 @@ export async function setup(): Promise<void> {
     "--name",
     CONTAINER_NAME,
     "-p",
-    `${LOCALSTACK_PORT}:4566`,
+    `127.0.0.1:${LOCALSTACK_PORT}:4566`,
     "-e",
     "SERVICES=s3",
     "-e",

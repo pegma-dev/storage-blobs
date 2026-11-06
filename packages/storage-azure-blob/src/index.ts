@@ -5,16 +5,17 @@ import type {
   ContainerClient,
 } from "@azure/storage-blob";
 import {
-  BlobSizeLimitError,
   BlobStoreError,
   BlobValidationError,
   DEFAULT_CONTENT_TYPE,
   DEFAULT_MAX_OBJECT_BYTES,
+  assertValidEtag,
   assertValidBlobKey,
   assertValidBlobPrefix,
   assertValidCacheControl,
   assertValidContentType,
   normalizeUserMetadata,
+  readBlobBody,
   type BlobGetResult,
   type BlobListPage,
   type BlobObjectInfo,
@@ -93,79 +94,6 @@ function assertMaxBytes(
     );
   }
   return maxBytes;
-}
-
-function assertEtag(etag: string, label: string): void {
-  if (typeof etag !== "string" || etag.length === 0) {
-    throw new BlobValidationError(`${label} must be a non-empty string.`);
-  }
-}
-
-function copyBytes(source: Uint8Array): Uint8Array {
-  const copy = new Uint8Array(source.byteLength);
-  copy.set(source);
-  return copy;
-}
-
-async function readBody(
-  body: ReadableStream<Uint8Array> | Uint8Array,
-  limitBytes: number,
-): Promise<Uint8Array> {
-  if (body instanceof Uint8Array) {
-    if (body.byteLength > limitBytes) {
-      throw new BlobSizeLimitError(limitBytes);
-    }
-    return copyBytes(body);
-  }
-
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (!(value instanceof Uint8Array)) {
-        throw new BlobValidationError(
-          "Body stream chunks must be Uint8Array values.",
-        );
-      }
-      total += value.byteLength;
-      if (total > limitBytes) {
-        void reader.cancel().catch(() => {
-          /* size error wins */
-        });
-        throw new BlobSizeLimitError(limitBytes);
-      }
-      chunks.push(copyBytes(value));
-    }
-  } catch (error) {
-    if (
-      error instanceof BlobSizeLimitError ||
-      error instanceof BlobValidationError
-    ) {
-      throw error;
-    }
-    throw new BlobStoreError("Failed to read object body stream.", {
-      cause: error,
-    });
-  }
-
-  if (chunks.length === 0) {
-    return new Uint8Array(0);
-  }
-  if (chunks.length === 1) {
-    return chunks[0]!;
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
 }
 
 function nodeStreamToWeb(
@@ -273,15 +201,21 @@ export function createAzureBlobStore(
   const createIfMissing = options.createContainerIfMissing !== false;
   const containerName = container.containerName;
   // Credential-free identity so SAS query strings never enter list cursors.
-  let endpoint = container.url;
+  let containerUrl: URL;
   try {
-    const parsed = new URL(container.url);
-    parsed.search = "";
-    parsed.hash = "";
-    endpoint = parsed.toString();
-  } catch {
-    // Fall back to the raw URL if it is not absolute.
+    containerUrl = new URL(container.url);
+  } catch (error) {
+    throw new BlobValidationError("containerClient.url must be absolute.", {
+      cause: error,
+    });
   }
+  containerUrl.search = "";
+  containerUrl.hash = "";
+  const endpoint = containerUrl.toString();
+  const containerPathPrefix = `${containerUrl.pathname.replace(/\/$/u, "")}/`;
+  const decodedContainerPathPrefix = `${decodeURIComponent(
+    containerUrl.pathname,
+  ).replace(/\/$/u, "")}/`;
   const backendId = `${container.accountName ?? "account"}|${endpoint}|${containerName}`;
   let ensureContainer: Promise<void> | undefined;
 
@@ -303,6 +237,45 @@ export function createAzureBlobStore(
     await ensureContainer;
   }
 
+  function containedBlockBlobClient(key: string) {
+    const blob = container.getBlockBlobClient(key);
+    let blobUrl: URL;
+    try {
+      blobUrl = new URL(blob.url);
+    } catch (error) {
+      throw new BlobStoreError(
+        `Azure produced an invalid URL for ${JSON.stringify(key)}.`,
+        { cause: error },
+      );
+    }
+    let decodedBlobPath: string;
+    try {
+      decodedBlobPath = decodeURIComponent(blobUrl.pathname);
+    } catch (error) {
+      throw new BlobStoreError(
+        `Azure produced an invalid URL for ${JSON.stringify(key)}.`,
+        { cause: error },
+      );
+    }
+    const relativePath = decodedBlobPath.slice(
+      decodedContainerPathPrefix.length,
+    );
+    if (
+      blobUrl.origin !== containerUrl.origin ||
+      !blobUrl.pathname.startsWith(containerPathPrefix) ||
+      !decodedBlobPath.startsWith(decodedContainerPathPrefix) ||
+      relativePath.length === 0 ||
+      relativePath
+        .split("/")
+        .some((segment) => segment === "." || segment === "..")
+    ) {
+      throw new BlobStoreError(
+        `Azure produced a URL outside the configured container for ${JSON.stringify(key)}.`,
+      );
+    }
+    return blob;
+  }
+
   return {
     async put(key, body, putOptions) {
       assertValidBlobKey(key);
@@ -317,7 +290,7 @@ export function createAzureBlobStore(
         throw new BlobValidationError('ifNoneMatch must be the literal "*".');
       }
       if (ifMatch !== undefined) {
-        assertEtag(ifMatch, "ifMatch");
+        assertValidEtag(ifMatch, "ifMatch");
       }
 
       const contentType = assertValidContentType(
@@ -329,10 +302,10 @@ export function createAzureBlobStore(
           : assertValidCacheControl(putOptions.cacheControl);
       const userMetadata = normalizeUserMetadata(putOptions?.userMetadata);
       const limitBytes = assertMaxBytes(putOptions?.maxBytes, maxObjectBytes);
-      const bytes = await readBody(body, limitBytes);
+      const bytes = await readBlobBody(body, limitBytes);
 
       await ready();
-      const blob = container.getBlockBlobClient(key);
+      const blob = containedBlockBlobClient(key);
 
       const conditions =
         ifNoneMatch === "*"
@@ -409,7 +382,7 @@ export function createAzureBlobStore(
     async get(key) {
       assertValidBlobKey(key);
       await ready();
-      const blob = container.getBlockBlobClient(key);
+      const blob = containedBlockBlobClient(key);
       let download: BlobDownloadResponseParsed;
       try {
         download = await blob.download(0);
@@ -452,7 +425,7 @@ export function createAzureBlobStore(
     async head(key) {
       assertValidBlobKey(key);
       await ready();
-      const blob = container.getBlockBlobClient(key);
+      const blob = containedBlockBlobClient(key);
       try {
         const props = await blob.getProperties();
         return toObjectInfo(key, {
@@ -477,10 +450,10 @@ export function createAzureBlobStore(
       assertValidBlobKey(key);
       const ifMatch = deleteOptions?.ifMatch;
       if (ifMatch !== undefined) {
-        assertEtag(ifMatch, "ifMatch");
+        assertValidEtag(ifMatch, "ifMatch");
       }
       await ready();
-      const blob = container.getBlockBlobClient(key);
+      const blob = containedBlockBlobClient(key);
       try {
         await blob.delete(
           ifMatch === undefined ? undefined : { conditions: { ifMatch } },

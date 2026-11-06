@@ -8,16 +8,17 @@ import {
   type S3Client,
 } from "@aws-sdk/client-s3";
 import {
-  BlobSizeLimitError,
   BlobStoreError,
   BlobValidationError,
   DEFAULT_CONTENT_TYPE,
   DEFAULT_MAX_OBJECT_BYTES,
+  assertValidEtag,
   assertValidBlobKey,
   assertValidBlobPrefix,
   assertValidCacheControl,
   assertValidContentType,
   normalizeUserMetadata,
+  readBlobBody,
   type BlobListPage,
   type BlobObjectInfo,
   type BlobStore,
@@ -157,12 +158,6 @@ function assertMaxBytes(
   return maxBytes;
 }
 
-function assertEtag(etag: string, label: string): void {
-  if (typeof etag !== "string" || etag.length === 0) {
-    throw new BlobValidationError(`${label} must be a non-empty string.`);
-  }
-}
-
 function assertBucketName(bucket: string): void {
   if (typeof bucket !== "string" || bucket.length === 0) {
     throw new BlobValidationError("bucket must be a non-empty string.");
@@ -173,67 +168,6 @@ function copyBytes(source: Uint8Array): Uint8Array {
   const copy = new Uint8Array(source.byteLength);
   copy.set(source);
   return copy;
-}
-
-async function readBody(
-  body: ReadableStream<Uint8Array> | Uint8Array,
-  limitBytes: number,
-): Promise<Uint8Array> {
-  if (body instanceof Uint8Array) {
-    if (body.byteLength > limitBytes) {
-      throw new BlobSizeLimitError(limitBytes);
-    }
-    return copyBytes(body);
-  }
-
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (!(value instanceof Uint8Array)) {
-        throw new BlobValidationError(
-          "Body stream chunks must be Uint8Array values.",
-        );
-      }
-      total += value.byteLength;
-      if (total > limitBytes) {
-        void reader.cancel().catch(() => {
-          /* size error wins */
-        });
-        throw new BlobSizeLimitError(limitBytes);
-      }
-      chunks.push(copyBytes(value));
-    }
-  } catch (error) {
-    if (
-      error instanceof BlobSizeLimitError ||
-      error instanceof BlobValidationError
-    ) {
-      throw error;
-    }
-    throw new BlobStoreError("Failed to read object body stream.", {
-      cause: error,
-    });
-  }
-
-  if (chunks.length === 0) {
-    return new Uint8Array(0);
-  }
-  if (chunks.length === 1) {
-    return chunks[0]!;
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
 }
 
 function encodeListCursor(backendId: string, continuation: string): string {
@@ -433,7 +367,7 @@ export function createCloudflareR2BlobStore(
         throw new BlobValidationError('ifNoneMatch must be the literal "*".');
       }
       if (ifMatch !== undefined) {
-        assertEtag(ifMatch, "ifMatch");
+        assertValidEtag(ifMatch, "ifMatch");
       }
 
       const contentType = assertValidContentType(
@@ -445,7 +379,7 @@ export function createCloudflareR2BlobStore(
           : assertValidCacheControl(putOptions.cacheControl);
       const userMetadata = normalizeUserMetadata(putOptions?.userMetadata);
       const limitBytes = assertMaxBytes(putOptions?.maxBytes, maxObjectBytes);
-      const bytes = await readBody(body, limitBytes);
+      const bytes = await readBlobBody(body, limitBytes);
 
       const input: {
         Bucket: string;
@@ -474,22 +408,15 @@ export function createCloudflareR2BlobStore(
         input.IfMatch = ifMatch;
       }
 
-      const finishPut = async (response: {
+      const finishPut = (response: {
         ETag?: string | undefined;
-      }): Promise<PutResult> => {
+      }): PutResult => {
         bucketVerified = true;
-        const etag = response.ETag;
-        if (etag === undefined || etag.length === 0) {
-          // Some S3-compatible servers omit ETag on put; re-read via HEAD.
-          const head = await headRaw(key);
-          if (head === null) {
-            throw new BlobStoreError(
-              `R2 put returned no etag and object is missing for ${JSON.stringify(key)}.`,
-            );
-          }
-          return { ok: true, etag: head.etag, size: bytes.byteLength };
-        }
-        return { ok: true, etag, size: bytes.byteLength };
+        return {
+          ok: true,
+          etag: requireEtag(response.ETag, key),
+          size: bytes.byteLength,
+        };
       };
 
       try {
@@ -648,7 +575,7 @@ export function createCloudflareR2BlobStore(
       assertValidBlobKey(key);
       const ifMatch = deleteOptions?.ifMatch;
       if (ifMatch !== undefined) {
-        assertEtag(ifMatch, "ifMatch");
+        assertValidEtag(ifMatch, "ifMatch");
       }
 
       // S3 DeleteObject is idempotent (missing key still returns success) and

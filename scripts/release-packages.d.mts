@@ -17,6 +17,7 @@ export interface ReleaseCommandOptions extends ValidationOptions {
   readonly manifest?: string;
   readonly output?: string;
   readonly expectedManifestDigest?: string;
+  readonly skipSmoke?: boolean;
 }
 
 export interface PublicPackageManifest {
@@ -34,7 +35,15 @@ export interface ValidationResult {
 
 export const RELEASE_PACKAGES: readonly ReleasePackageDefinition[];
 
+export const RELEASE_MANIFEST_SCHEMA_VERSION: number;
+
+export const STABLE_RELEASE_TAG: RegExp;
+
 export const REVIEWED_PNPM: {
+  readonly version: string;
+};
+
+export const REVIEWED_NPM: {
   readonly version: string;
 };
 
@@ -96,6 +105,10 @@ export function prepareRelease(options?: ReleaseCommandOptions): Promise<{
   manifest: unknown;
   manifestDigest: string;
 }>;
+
+export function smokePreparedRelease(
+  options?: ReleaseCommandOptions,
+): Promise<void>;
 
 export function publishPreparedRelease(
   options?: ReleaseCommandOptions,

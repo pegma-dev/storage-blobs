@@ -139,9 +139,11 @@ describe("my adapter", () => {
 2. **Conditionals.** Prefer native `If-Match` / `If-None-Match` (or SDK
    equivalents). Map precondition failures to `{ ok: false, reason }` — do not
    throw for expected races.
-3. **Etags.** Opaque strings; pass them through. Never invent etag semantics
-   components can parse (for example, requiring a quoted form unless every
-   backend uses it — they do not).
+3. **Etags.** Opaque provider-issued strings pass through unchanged. Reject
+   `"*"` (including surrounding whitespace) for `ifMatch`; the wildcard is
+   reserved for create-only `ifNoneMatch: "*"`. Never invent other etag
+   semantics components can parse (for example, requiring a quoted form unless
+   every backend uses it — they do not).
 4. **Streaming.** Accept `ReadableStream` and `Uint8Array`. When the provider
    needs multipart under the hood, hide that inside `put`.
 5. **Oversize.** Enforce the configured ceiling. Cancelling a remaining body
